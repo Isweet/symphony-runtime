@@ -1,3 +1,0 @@
-[submodule "extern/MOTION"]
-	path = extern/MOTION
-	url = git@github.com:encryptogroup/MOTION.git
