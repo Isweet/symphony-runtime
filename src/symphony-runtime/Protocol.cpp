@@ -3,210 +3,306 @@
 #include <vector>
 #include <iostream>
 
-struct SPDZ {};
+// Example of BaseBit trait
+class GMWBaseBit {
+public:
+  using Context = struct GMWContext {};
 
-struct GMWBaseBool {
-  using Base    = GMWBaseBool;
-  using Context = SPDZ;
-  using Clear   = bool;
-  using Share   = bool;
+  GMWBaseBit(Context& context) : context_(context) {};
+  GMWBaseBit(Context& context, bool share) : context_(context), is_constant_(false), share_(share) {};
+  GMWBaseBit(const GMWBaseBit& other) : context_(other.context_), is_constant_(other.is_constant_), share_(other.share_) {};
 
-  static Share Constant(Context& context, Clear clear) {
-    return clear; // TODO: FIXME, provided by MP-SPDZ
+  inline GMWBaseBit& operator=(const GMWBaseBit& r) {
+    context_     = r.context_;
+    is_constant_ = r.is_constant_;
+    share_       = r.share_;
+
+    return *this;
   }
 
-  static Share Add(Context& context, Share l, Share r) {
-    return l ^ r;
+  static inline GMWBaseBit Zero(Context& context) {
+    GMWBaseBit ret(context, false);
+    ret.is_constant_ = true;
+    return ret;
   }
 
-  static Share Neg(Context& context, Share v) {
-    return v;
+  static inline GMWBaseBit One(Context& context) {
+    GMWBaseBit ret(context, true);
+    ret.is_constant_ = true;
+    return ret;
   }
 
-  static Share Mul(Context& context, Share l, Share r) {
-    return l & r; // TODO: FIXME, provided by MP-SPDZ
+  inline bool From() const {
+    return share_;
+  }
+
+  inline GMWBaseBit operator^(const GMWBaseBit& r) const {
+    return GMWBaseBit(context_, share_ ^ r.share_); // TODO: FIXME
+  }
+
+  inline GMWBaseBit operator&(const GMWBaseBit& r) const {
+    return GMWBaseBit(context_, share_ & r.share_); // TODO: FIXME
+  }
+
+  inline GMWBaseBit operator|(const GMWBaseBit& r) const {
+    return (*this ^ r) ^ (*this & r);
+  }
+
+  inline GMWBaseBit operator~() const {
+    return *this ^ One(context_);
+  }
+
+protected:
+  Context& context_;
+  bool is_constant_;
+  bool share_;
+};
+
+// Booleans, based on an underlying secure bit
+template <typename BaseBit>
+class Bool : BaseBit {
+public:
+  using Context = typename BaseBit::Context;
+
+  Bool(Context& context, bool share) : BaseBit(context, share) {};
+  Bool(const Bool& other) : BaseBit(other) {};
+
+  inline Bool& operator=(const Bool& r) {
+    *this = r;
+    return *this;
+  }
+
+  static inline Bool False(Context& context) {
+    Bool(BaseBit::Zero(context));
+  }
+
+  static inline Bool True(Context& context) {
+    Bool(BaseBit::One(context));
+  }
+
+  inline Bool operator!() const {
+    return ~(*this);
+  }
+
+  inline Bool operator&&(const Bool& r) const {
+    return *this & r;
+  }
+
+  inline Bool operator||(const Bool& r) const {
+    return *this | r;
+  }
+
+  // g ? a : b ≜ (g & b) ^ (~g & b) ≡ g & (a ^ b) ^ b
+  inline BaseBit Mux(const BaseBit& a, const BaseBit& b) const {
+    return (*this & (a ^ b)) ^ b;
   }
 };
 
-template <typename P>
-struct BoolFrBoolBase {
-  using Base    = P;
-  using Context = typename Base::Context;
-  using Clear   = typename Base::Clear;
-  using Share   = typename Base::Share;
+// Bits, based on an underlying secure bit
+template <typename BaseBit>
+class Bit : public BaseBit {
+public:
+  using Bool    = Bool<BaseBit>;
+  using Context = typename BaseBit::Context;
 
-  static Share Constant(Context& context, Clear clear) {
-    return Base::Constant(context, clear);
+  Bit(Context& context) : BaseBit(context) {};
+  Bit(Context& context, bool share) : BaseBit(context, share) {};
+  Bit(const BaseBit& b) : BaseBit(b) {};
+  Bit(const Bit& other) : BaseBit(other) {};
+
+  static inline Bit Zero(Context& context) {
+    return Bit(BaseBit::Zero(context));
   }
 
-  static Share Xor(Context& context, Share l, Share r) {
-    return Base::Add(context, l, r);
+  static inline Bit One(Context& context) {
+    return Bit(BaseBit::One(context));
   }
 
-  static Share Not(Context& context, Share v) {
-    return Base::Neg(context, v);
+  inline Bool operator==(const Bit& r) const {
+    return !Bool(*this ^ r);
   }
 
-  static Share And(Context& context, Share l, Share r) {
-    return Base::Mul(context, l, r);
-  }
-
-  static Share Or(Context& context, Share l, Share r) {
-    return Xor(context, Xor(context, l, r), And(context, l, r));
-  }
-
-  static Share Mux(Context& context, Share g, Share l, Share r) {
-    return Xor(context, And(context, g, l), And(context, Not(context, g), r));
+  // a != b ≜ !(a == b) ≡ !(!(a ^ b) ≡ ~(~(a ^ b)) ≡ a ^ b
+  inline Bool operator!=(const Bit& r) const {
+    return Bool(*this ^ r);
   }
 };
 
-template <typename P>
-struct BoolVecFrBool {
-  using Base    = P;
-  using Context = typename Base::Context;
-  template <size_t bw>
-  using Clear   = std::array<typename Base::Clear, bw>;
-  template <size_t bw>
-  using Share   = std::array<typename Base::Share, bw>;
+// BitVectors, based on underlying secure bit
+template <typename BaseBit, std::size_t size>
+class BitVector {
+public:
+  using Bit     = Bit<BaseBit>;
+  using Context = typename Bit::Context;
 
-  template <size_t bw>
-  static Share<bw> Constant(Context& context, Clear<bw> clear) {
-    Share<bw> ret;
-    for (std::size_t i = 0; i < bw; i++) {
-      ret[i] = Base::Constant(context, clear[i]);
+  BitVector(Context& context) : context_(context), bits_(size, Bit(context)) {};
+  BitVector(Context& context, std::array<Bit, size> bits) : context_(context), bits_(bits) {};
+  BitVector(const BitVector& other) : context_(other.context_), bits_(other.bits_) {};
+
+  inline BitVector& operator=(const BitVector& r) {
+    context_ = r.context_;
+    bits_    = r.bits_;
+
+    return *this;
+  }
+
+  static inline BitVector Zero(Context& context) {
+    std::array<Bit, size> bits;
+    for (std::size_t i = 0; i < size; i++) {
+      bits[i] = Bit::Zero(context);
+    }
+    return BitVector(context, bits);
+  }
+
+  static inline BitVector One(Context& context) {
+    std::array<Bit, size> bits;
+    for (std::size_t i = 0; i < size; i++) {
+      bits[i] = Bit::One(context);
+    }
+    return BitVector(context, bits);
+  }
+
+  inline Bit& operator[](std::size_t i) {
+    return bits_[i];
+  }
+
+  inline Bit Read(std::size_t i) const {
+    return bits_[i];
+  }
+
+  inline BitVector operator^(const BitVector& r) const {
+    BitVector ret(context_);
+    for (std::size_t i = 0; i < size; i++) {
+      ret.bits_[i] = bits_[i] ^ r.bits_[i];
     }
     return ret;
   }
 
-  template <size_t bw>
-  static Share<bw> Xor(Context& context, Share<bw> l, Share<bw> r) {
-    Share<bw> ret;
-    for (std::size_t i = 0; i < bw; i++) {
-      ret[i] = Base::Xor(context, l[i], r[i]);
+  inline BitVector operator&(const BitVector& r) const {
+    BitVector ret(context_);
+    for (std::size_t i = 0; i < size; i++) {
+      ret.bits_[i] = bits_[i] & r.bits_[i];
     }
     return ret;
   }
 
-  template <size_t bw>
-  static Share<bw> Not(Context& context, Share<bw> v) {
-    Share<bw> ret;
-    for (std::size_t i = 0; i < bw; i++) {
-      ret[i] = Base::Not(context, v[i]);
+  inline BitVector operator|(const BitVector& r) const {
+    BitVector ret(context_);
+    for (std::size_t i = 0; i < size; i++) {
+      ret.bits_[i] = bits_[i] | r.bits_[i];
     }
     return ret;
   }
 
-  template <size_t bw>
-  static Share<bw> And(Context& context, Share<bw> l, Share<bw> r) {
-    Share<bw> ret;
-    for (std::size_t i = 0; i < bw; i++) {
-      ret[i] = Base::And(context, l[i], r[i]);
+  inline BitVector operator~() const {
+    BitVector ret(context_);
+    for (std::size_t i = 0; i < size; i++) {
+      ret.bits_[i] = ~bits_[i];
     }
     return ret;
   }
 
-  template <size_t bw>
-  static Share<bw> Or(Context& context, Share<bw> l, Share<bw> r) {
-    Share<bw> ret;
-    for (std::size_t i = 0; i < bw; i++) {
-      ret[i] = Base::Or(context, l[i], r[i]);
+  inline Bool<Bit> operator==(const BitVector& r) const {
+    Bool<Bit> ret = Bool<Bit>::True;
+    for (std::size_t i = 0; i < size; i++) {
+      ret = ret & (bits_[i] == r.bits_[i]);
     }
     return ret;
   }
 
-  template <size_t bw>
-  static Share<bw> Mux(Context& context, Share<bw> g, Share<bw> l, Share<bw> r) {
-    Share<bw> ret;
-    for (std::size_t i = 0; i < bw; i++) {
-      ret[i] = Base::Mux(context, g[i], l[i], r[i]);
-    }
-    return ret;
+  inline Bool<Bit> operator!=(const BitVector& r) const {
+    return !(*this == r);
   }
+
+private:
+  Context& context_;
+  std::vector<Bit> bits_; // TODO: Could get better performance if this was std::array<bool, size> instead?
 };
 
-template <typename T>
-constexpr std::size_t bits() {
-  return 8 * sizeof(T);
-}
+template <typename BaseBit, typename T> // TODO: How do I restrict this to only uint8_t, uint16_t, uint32_t, and uint64_t?
+class BaseUInt {
+public:
+  static const std::size_t size = 8 * sizeof(T);
 
-template <typename P>
-struct ArithBaseFrBoolVec {
-  using Base    = P;
-  using Context = typename Base::Context;
-  template <typename Z>
-  using Clear   = Z;
-  template <typename Z>
-  using Share   = typename Base::template Share<bits<Z>()>;
+  using Bit       = Bit<BaseBit>;
+  using BitVector = BitVector<BaseBit, size>;
+  using Context   = typename BitVector::Context;
 
-  using Bool      = typename Base::Base;
-  using BoolShare = typename Bool::Share;
+  BaseUInt(Context& context, BitVector bv) : context_(context), bv_(bv) {};
 
-  template <typename Z>
-  using BaseClear = typename Base::template Clear<bits<Z>()>;
-
-  template <typename Z>
-  static Share<Z> Constant(Context& context, Z z) {
-    std::size_t bits = ::bits<Z>();
-    BaseClear<Z> clear;
-    for (std::size_t i = 0; i < bits; i++) {
-      clear[i] = z & 1;
-      z >>= 1;
-    }
-    return Base::Constant(context, clear);
-  }
-
-  static std::pair<BoolShare, BoolShare> FullAdd(Context& context, BoolShare a, BoolShare b, BoolShare cin) {
-    BoolShare axb  = Bool::Xor(context, a, b);
-    BoolShare sum  = Bool::Xor(context, axb, cin);
-    BoolShare cout = Bool::Or(context, Bool::And(context, axb, cin), Bool::And(context, a, b));
-    return std::make_pair(sum, cout);
-  }
-
-  template <typename Z>
-  static Share<Z> Add(Context& context, Share<Z> l, Share<Z> r) {
-    std::size_t bits = ::bits<Z>();
-    Share<Z> ret;
-    BoolShare sum;
-    BoolShare carry = Bool::Constant(context, false);
-    for (std::size_t i = 0; i < bits; i++) {
-      std::pair<BoolShare, BoolShare> p = FullAdd(context, l[i], r[i], carry);
-      sum    = p.first;
-      carry  = p.second;
-      ret[i] = sum;
+  // https://github.com/emp-toolkit/emp-tool/blob/master/emp-tool/utils/utils.hpp#L47
+  static inline BitVector ToBits(Context& context, T t) {
+    BitVector ret(context);
+    for (std::size_t i = 0; i < size; i++) {
+      ret[i] = Bit(context, t & 1);
+      t >>= 1;
     }
     return ret;
   }
+
+  // https://github.com/emp-toolkit/emp-tool/blob/master/emp-tool/utils/utils.hpp#L36
+  inline T From() const {
+    T ret = 0;
+    for (std::size_t i = 0; i < size; i++) {
+      T s = bv_.Read(i).From();
+      s <<= i;
+      ret |= s;
+    }
+    return ret;
+  }
+
+  inline BaseUInt operator+(const BaseUInt &r) const {
+    BaseUInt ret(context_);
+    AddFull(&ret.bv_, nullptr, bv_, r.bv_, Bit::Zero(context_), size);
+    return ret;
+  }
+
+private:
+
+  // https://github.com/emp-toolkit/emp-tool/blob/master/emp-tool/circuits/integer.hpp#L1
+  static inline void AddFull(BitVector* sum, Bit* carry_out, const BitVector& a, const BitVector& b, const Bit& carry_in, std::size_t size) {
+    if (size == 0 && carry_out) {
+      *carry_out = carry_in;
+      return;
+    }
+
+    Bit carry = carry_in;
+
+    for (std::size_t i = 0; i < size; i++) {
+      Bit axc   = a.Read(i) ^ carry;
+      Bit bxc   = b.Read(i) ^ carry;
+      (*sum)[i] = a.Read(i) ^ bxc;
+      Bit t     = axc & bxc;
+      carry     = carry ^ t;
+    }
+
+    if (carry_out) {
+      *carry_out = carry;
+    }
+  }
+
+  Context& context_;
+  BitVector bv_;
+
+  BaseUInt(Context& context) : context_(context), bv_(context) {};
 };
 
-using GMWBoolBool      = BoolFrBoolBase<GMWBaseBool>;
-using GMWBoolBoolVec   = BoolVecFrBool<GMWBoolBool>;
-using GMWBoolArithBase = ArithBaseFrBoolVec<GMWBoolBoolVec>;
-
-uint8_t frBool(std::array<bool, 8> bs) {
-  uint8_t ret = 0;
-  for (std::size_t i = 0; i < 8; i++) {
-    bool b = bs[i];
-    uint8_t s = b ? 1 : 0;
-    s <<= i;
-    ret |= s;
-  }
-  return ret;
-}
+using GMWBool      = Bool<GMWBaseBit>;
+using GMWBit       = Bit<GMWBaseBit>;
+template <std::size_t size>
+using GMWBitVector = BitVector<GMWBaseBit, size>;
+using GMWUInt8     = BaseUInt<GMWBaseBit, uint8_t>;
+using GMWUInt64    = BaseUInt<GMWBaseBit, uint64_t>;
 
 int main() {
-  SPDZ context;
-  uint8_t a = 2;
-  std::array<bool, 8> a_share = GMWBoolArithBase::Constant(context, a);
-  uint8_t b = 3;
-  std::array<bool, 8> b_share = GMWBoolArithBase::Constant(context, b);
-  std::array<bool, 8> sum = GMWBoolArithBase::Add<uint8_t>(context, a_share, b_share);
-  std::cout << unsigned(frBool(a_share)) << std::endl;
-  std::cout << unsigned(frBool(b_share)) << std::endl;
-  std::cout << unsigned(frBool(sum)) << std::endl;
-  return 0;
+  GMWBaseBit::Context context;
+
+  uint64_t a = 2000000;
+  uint64_t b = 3000000;
+  auto a_share   = GMWUInt64(context, GMWUInt64::ToBits(context, a));
+  auto b_share   = GMWUInt64(context, GMWUInt64::ToBits(context, b));
+  auto sum_share = a_share + b_share;
+  std::cout << unsigned(a_share.From()) << std::endl;
+  std::cout << unsigned(b_share.From()) << std::endl;
+  std::cout << unsigned(sum_share.From()) << std::endl;
 }
-
-//using GMWBoolArith     = ArithFrArithBase<GMWBoolArithBase>;
-//using GMWBoolArithVec  = ArithVecFrArith<GMWBoolArith>;
-
-//struct GMW : public GMWBoolBool, public GMWBoolBoolVec, public GMWBoolArith, GMWBoolArithVec {};
