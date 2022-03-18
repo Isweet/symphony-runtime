@@ -7,48 +7,103 @@
  * --- GMW Client --- *
  * ------------------ */
 
-class GMWClient {};
+class GMWClient {
+private:
+  std::vector<std::shared_ptr<Channel>> parties_;
+public:
+  std::size_t NumParties() const;
+  template <typename T>
+  T Rand();
+  template <typename T>
+  void Send(std::size_t party, T v);
+  template <typename T>
+  T Recv(std::size_t client);
+};
 
 /* ----------------- *
  * --- GMW Party --- *
  * ----------------- */
 
-class GMWParty {};
+class GMWParty {
+private:
+  std::vector<std::shared_ptr<Channel>> clients_;
+public:
+  inline bool IAm(std::size_t party);
+  template <typename T>
+  void Send(std::size_t client, T v);
+  template <typename T>
+  T Recv(std::size_t client);
+};
 
 /* --------------------- *
  * --- GMW : BaseBit --- *
  * --------------------- */
 
+// TODO: Document `BaseBit` trait -- basically the public portion of GMWBaseBit below
+
 class GMWBaseBit {
 public:
-  using Context = GMWParty;
+  using Client = GMWClient;
+  using Party  = GMWParty;
 
-  GMWBaseBit()  = default;
-  ~GMWBaseBit() = default;
+  GMWBaseBit()                        = default;
   GMWBaseBit(const GMWBaseBit& other) = default;
+  GMWBaseBit(GMWBaseBit&& other)      = default;
+  ~GMWBaseBit()                       = default;
+
   inline GMWBaseBit& operator=(const GMWBaseBit& r) = default;
-  GMWBaseBit(GMWBaseBit&& other) = default;
-  inline GMWBaseBit& operator=(GMWBaseBit&& r) = default;
+  inline GMWBaseBit& operator=(GMWBaseBit&& r)      = default;
 
-  GMWBaseBit(Context& context, std::size_t client);
+  static inline void       ShareTo(Client& context, bool b);
+  static inline void       ShareTo(Client& context, const GMWBaseBit& v); // TODO: Should we also take Party& here?
+  static inline GMWBaseBit ShareFr(Party& context, std::size_t client);
+  static inline GMWBaseBit ShareFr(Party& context, std::vector<std::size_t> clients);
   static inline GMWBaseBit Constant(bool c);
-  static inline void Reveal(Context& context, std::size_t client, const GMWBaseBit& v);
+  static inline void       RevealTo(Party& context, std::size_t client, const GMWBaseBit& v);
+  static inline bool       RevealFr(Client& context);
 
-  static inline GMWBaseBit Xor(Context& context, const GMWBaseBit& l, const GMWBaseBit& r);
-  static inline GMWBaseBit And(Context& context, const GMWBaseBit& l, const GMWBaseBit& r);
+  static inline GMWBaseBit Xor(Party& context, const GMWBaseBit& l, const GMWBaseBit& r); // TODO: Remove Party& parameter
+  static inline GMWBaseBit And(Party& context, const GMWBaseBit& l, const GMWBaseBit& r);
 
-  inline bool From() const;
+  inline bool From() const; // TODO: Remove, just here for testing
 private:
+  GMWBaseBit(bool internal);
+
   bool is_constant_;
   bool share_;
-  GMWBaseBit(bool internal);
 };
 
 inline GMWBaseBit::GMWBaseBit(bool internal) : is_constant_(false), share_(internal) {};
 
-inline GMWBaseBit::GMWBaseBit(Context& context, std::size_t client) : is_constant_(false) {
-  assert(false); // TODO: Receive your share
-};
+inline void GMWBaseBit::ShareTo(Client& context, bool b) {
+  std::size_t num_parties = context.NumParties();
+  bool sum = false;
+  for (std::size_t i = 0; i < num_parties - 1; i++) {
+    bool share = context.Rand<bool>();
+    context.Send(i, share);
+    sum ^= share;
+  }
+
+  context.Send<bool>(num_parties - 1, b ^ sum);
+}
+
+inline void GMWBaseBit::ShareTo(Client& context, const GMWBaseBit& v) {
+  GMWBaseBit::ShareTo(context, v.share_);
+}
+
+// TODO: Should this be a constructor? It is pleasant to me to have the symmetry with `ShareTo`
+inline GMWBaseBit GMWBaseBit::ShareFr(Party& context, std::size_t client) {
+  return GMWBaseBit(context.Recv<bool>(client));
+}
+
+inline GMWBaseBit GMWBaseBit::ShareFr(Party& context, std::vector<std::size_t> clients) {
+  std::size_t num_clients = clients.size();
+  bool share = false;
+  for (std::size_t i = 0; i < num_clients; i++) {
+    share ^= context.Recv<bool>(clients[i]);
+  }
+  return GMWBaseBit(share);
+}
 
 inline GMWBaseBit GMWBaseBit::Constant(bool c) {
   GMWBaseBit ret;
@@ -57,15 +112,54 @@ inline GMWBaseBit GMWBaseBit::Constant(bool c) {
   return ret;
 }
 
-inline void GMWBaseBit::Reveal(Context& context, std::size_t client, const GMWBaseBit& v) {
-  assert(false); // TODO: Send your share
+inline void GMWBaseBit::RevealTo(Party& context, std::size_t client, const GMWBaseBit& v) {
+  if (v.is_constant_) {
+    if (context.IAm(0)) {
+      context.Send<bool>(client, v.share_);
+    } else {
+      context.Send<bool>(client, false);
+    }
+
+    return;
+  }
+
+  context.Send<bool>(client, v.share_);
 }
 
-inline GMWBaseBit GMWBaseBit::Xor(Context& context, const GMWBaseBit& l, const GMWBaseBit& r) {
-  return GMWBaseBit(l.share_ ^ r.share_); // TODO: FIXME
+inline bool GMWBaseBit::RevealFr(Client& context) {
+  std::size_t num_parties = context.NumParties();
+  bool ret = false;
+  for (std::size_t i = 0; i < num_parties; i++) {
+    ret ^= context.Recv<bool>(i);
+  }
+  return ret;
 }
 
-inline GMWBaseBit GMWBaseBit::And(Context& context, const GMWBaseBit& l, const GMWBaseBit& r) {
+inline GMWBaseBit GMWBaseBit::Xor(Party& context, const GMWBaseBit& l, const GMWBaseBit& r) {
+  if (l.is_constant_ && r.is_constant_) {
+    return Constant(l.share_ ^ r.share_);
+  }
+
+  if (l.is_constant_ && !context.IAm(0)) {
+    return r;
+  }
+
+  if (r.is_constant_ && !context.IAm(0)) {
+    return l;
+  }
+
+  return GMWBaseBit(l.share_ ^ r.share_);
+}
+
+inline GMWBaseBit GMWBaseBit::And(Party& context, const GMWBaseBit& l, const GMWBaseBit& r) {
+  if (l.is_constant_ && r.is_constant_) {
+    return Constant(l.share_ & r.share_);
+  }
+
+  if (l.is_constant_ || r.is_constant_) {
+    return GMWBaseBit(l.share_ & r.share_);
+  }
+
   return GMWBaseBit(l.share_ & r.share_); // TODO: FIXME
 }
 
@@ -77,44 +171,72 @@ inline bool GMWBaseBit::From() const {
  * --- Bit --- *
  * ----------- */
 
+// TODO: Document `Bit` trait -- basically the public portion of Bit below
+
 // A default implementation of the `Bit` (`Bool`) trait, based on an implementation of `BaseBit` trait
 template <typename BaseBit>
 class Bit : public BaseBit {
 public:
-  using Context = typename BaseBit::Context;
+  using Client = typename BaseBit::Client;
+  using Party  = typename BaseBit::Party;
 
-  Bit()  = default;
-  ~Bit() = default;
+  Bit()                 = default;
+  Bit(Bit&& other)      = default;
   Bit(const Bit& other) = default;
-  inline Bit& operator=(const Bit& r) = default;
-  Bit(Bit&& other) = default;
-  inline Bit& operator=(Bit&& r) = default;
+  ~Bit()                = default;
 
-  Bit(Context& context) : BaseBit(context) {};
+  inline Bit& operator=(const Bit& r) = default;
+  inline Bit& operator=(Bit&& r)      = default;
+
   Bit(const GMWBaseBit& b) : GMWBaseBit(b) {};
+
+  static inline void ShareTo(Client& context, bool b) {
+    BaseBit::ShareTo(context, b);
+  }
+
+  static inline void ShareTo(Client& context, const Bit& v) {
+    BaseBit::ShareTo(context, v);
+  }
+
+  static inline Bit ShareFr(Party& context, std::size_t client) {
+    return Bit(BaseBit::ShareFr(context, client));
+  }
+
+  static inline Bit ShareFr(Party& context, std::vector<std::size_t> clients) {
+    return Bit(BaseBit::ShareFr(context, clients));
+  }
+
   static inline Bit Constant(bool c) {
     return Bit(BaseBit::Constant(c));
   }
 
+  static inline void RevealTo(Party& context, std::size_t client, const Bit& v) {
+    BaseBit::RevealTo(context, client, v);
+  }
+
+  static inline bool RevealFr(Client& context) {
+    BaseBit::RevealFr(context);
+  }
+
   // l | r ≜ (l ^ r) ^ (l & r)
-  static inline Bit Or(Context& context, const Bit& l, const Bit& r) {
+  static inline Bit Or(Party& context, const Bit& l, const Bit& r) {
     GMWBaseBit l_xor_r = Xor(context, l, r);
     GMWBaseBit l_and_r = And(context, l, r);
     return Xor(context, l_xor_r, l_and_r);
   }
 
   // ~v ≜ v ^ 1
-  static inline Bit Not(Context& context, const Bit& v) {
+  static inline Bit Not(Party& context, const Bit& v) {
     return Xor(context, v, Constant(true));
   }
 
   // l == r ≜ ~(l ^ r)
-  static inline Bit Eq(Context& context, const Bit& l, const Bit& r) {
+  static inline Bit Eq(Party& context, const Bit& l, const Bit& r) {
     return Not(context, Xor(context, l, r));
   }
 
   // l != r ≜ ~(l == r) ≡ ~(~(l ^ r) ≡ l ^ r
-  static inline Bit NEq(Context& context, const Bit& l, const Bit& r) {
+  static inline Bit NEq(Party& context, const Bit& l, const Bit& r) {
     return Xor(context, l, r);
   }
 };
@@ -123,46 +245,28 @@ public:
  * --- BitVector --- *
  * ----------------- */
 
+// TODO: Document `BitVector` trait -- basically the public portion of BitVector below
+
 // An implementation of a `BitVector` trait, based on an implementation of `Bit` trait
 template <typename Bit>
 class BitVector {
 public:
-  using Context = typename Bit::Context;
+  using Client = typename Bit::Client;
+  using Party  = typename Bit::Party;
 
-  BitVector()  = default;
-  ~BitVector() = default;
+  BitVector()                       = default;
   BitVector(const BitVector& other) = default;
+  BitVector(BitVector&& other)      = default;
+  ~BitVector()                      = default;
+
   inline BitVector& operator=(const BitVector& r) = default;
-  BitVector(BitVector&& other) = default;
-  inline BitVector& operator=(BitVector&& r) = default;
+  inline BitVector& operator=(BitVector&& r)      = default;
 
-  BitVector(std::size_t size) : bits_(size) {
-    bits_.reserve(size);
-  }
-
-  BitVector(Context& context, std::size_t client, std::size_t size) : BitVector(size) {
-    for (std::size_t i = 0; i < size; i++) {
-      bits_[i] = Bit(context);
-    }
-  }
-
+  BitVector(std::size_t size) : bits_(size) {};
   BitVector(const std::vector<Bit>& bits) : bits_(bits) {};
 
-  static inline BitVector Constant(std::vector<bool> c) {
-    std::size_t size = c.size();
-    std::vector<Bit> bits(size);
-    bits.reserve(size);
-    for (std::size_t i = 0; i < size; i++) {
-      bits[i] = Bit::Constant(c[i]);
-    }
-    return BitVector(bits);
-  }
-
-  static inline void Reveal(Context& context, std::size_t client, const BitVector& v) {
-    std::size_t size = v.bits_.size();
-    for (std::size_t i = 0; i < size; i++) {
-      Bit::Reveal(context, client, v.bits_[i]);
-    }
+  inline std::size_t& Size() const {
+    return bits_.size();
   }
 
   inline Bit& operator[](std::size_t i) {
@@ -173,7 +277,91 @@ public:
     return bits_[i];
   }
 
-  static inline BitVector Xor(Context& context, const BitVector& l, const BitVector& r) {
+  static inline void ShareTo(Client& context, std::vector<bool> b) {
+    std::size_t num_parties = context.NumParties();
+    std::size_t num_bits    = b.size();
+
+    for (std::size_t i = 0; i < num_parties; i++) {
+      context.Send(i, num_bits);
+    }
+
+    for (std::size_t i = 0; i < num_bits; i++) {
+      Bit::ShareTo(context, b[i]);
+    }
+  }
+
+  static inline void ShareTo(Client& context, const BitVector& v) {
+    std::size_t num_parties = context.NumParties();
+    std::size_t num_bits    = v.Size();
+
+    for (std::size_t i = 0; i < num_parties; i++) {
+      context.Send(i, num_bits);
+    }
+
+    for (std::size_t i = 0; i < num_bits; i++) {
+      Bit::ShareTo(context, v[i]);
+    }
+  }
+
+  static inline GMWBaseBit ShareFr(Party& context, std::size_t client) {
+    std::size_t num_bits = context.template Recv<std::size_t>(client);
+    std::vector<Bit> bits(num_bits);
+    for (std::size_t i = 0; i < num_bits; i++) {
+      bits[i] = Bit::ShareFr(context, client);
+    }
+    return BitVector(bits);
+  }
+
+  static inline GMWBaseBit ShareFr(Party& context, std::vector<std::size_t> clients) {
+    std::size_t num_parties = context.NumParties();
+    std::size_t num_bits;
+
+    for (std::size_t i = 0; i < num_parties; i++) {
+      num_bits = context.template Recv<std::size_t>(clients[i]); // TODO: FIX ... this is dumb
+    }
+
+    std::vector<Bit> bits(num_bits);
+    for (std::size_t i = 0; i < num_bits; i++) {
+      bits[i] = Bit::ShareFr(context, clients);
+    }
+
+    return BitVector(bits);
+  }
+
+  static inline BitVector Constant(std::vector<bool> c) {
+    std::size_t size = c.size();
+    std::vector<Bit> bits(size);
+    for (std::size_t i = 0; i < size; i++) {
+      bits[i] = Bit::Constant(c[i]);
+    }
+    return BitVector(bits);
+  }
+
+  static inline void RevealTo(Party& context, std::size_t client, const BitVector& v) {
+    std::size_t num_bits = v.Size();
+    context.Send(client, num_bits);
+    for (std::size_t i = 0; i < num_bits; i++) {
+      Bit::RevealTo(context, client, v[i]);
+    }
+  }
+
+  static inline std::vector<bool> RevealFr(Client& context) {
+    std::size_t num_parties = context.NumParties();
+    std::size_t num_bits;
+
+    for (std::size_t i = 0; i < num_parties; i++) {
+      num_bits = context.template Recv<std::size_t>(i); // TODO: FIX ... this is dumb
+    }
+
+    std::vector<bool> ret(num_bits);
+    for (std::size_t i = 0; i < num_bits; i++) {
+      ret[i] = Bit::RevealFr(context);
+    }
+
+    return ret;
+  }
+
+  static inline BitVector Xor(Party& context, const BitVector& l, const BitVector& r) {
     assert(l.bits_.size() == r.bits_.size());
     std::size_t size = l.bits_.size();
     std::vector<Bit> bits(size);
@@ -184,7 +372,7 @@ public:
     return BitVector(bits);
   }
 
-  static inline BitVector And(Context& context, const BitVector& l, const BitVector& r) {
+  static inline BitVector And(Party& context, const BitVector& l, const BitVector& r) {
     assert(l.bits_.size() == r.bits_.size());
     std::size_t size = l.bits_.size();
     std::vector<Bit> bits(size);
@@ -195,7 +383,7 @@ public:
     return BitVector(bits);
   }
 
-  static inline BitVector Or(Context& context, const BitVector& l, const BitVector& r) {
+  static inline BitVector Or(Party& context, const BitVector& l, const BitVector& r) {
     assert(l.bits_.size() == r.bits_.size());
     std::size_t size = l.bits_.size();
     std::vector<Bit> bits(size);
@@ -206,7 +394,7 @@ public:
     return BitVector(bits);
   }
 
-  static inline BitVector Not(Context& context, const BitVector& v) {
+  static inline BitVector Not(Party& context, const BitVector& v) {
     std::size_t size = v.bits_.size();
     std::vector<Bit> bits(size);
     bits.reserve(size);
@@ -216,7 +404,7 @@ public:
     return BitVector(bits);
   }
 
-  static inline Bit Eq(Context& context, const BitVector& l, const BitVector& r) {
+  static inline Bit Eq(Party& context, const BitVector& l, const BitVector& r) {
     assert(l.bits_.size() == r.bits_.size());
     std::size_t size = l.bits_.size();
     Bit ret = Bit::Constant(true);
@@ -226,7 +414,7 @@ public:
     return ret;
   }
 
-  static inline Bit NEq(Context& context, const BitVector& l, const BitVector& r) {
+  static inline Bit NEq(Party& context, const BitVector& l, const BitVector& r) {
     return Bit::Not(context, Eq(context, l, r));
   }
 
@@ -284,6 +472,8 @@ public:
   }
 
   // https://github.com/emp-toolkit/emp-tool/blob/master/emp-tool/utils/utils.hpp#L36
+  // TODO: Remove, just here for testing
+  // TODO: Move FrBits / ToBits to a utility class, have them go to/from std::vector<bool>
   inline T FrBits() const {
     T ret = 0;
     for (std::size_t i = 0; i < size; i++) {
