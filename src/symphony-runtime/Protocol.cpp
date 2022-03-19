@@ -3,30 +3,87 @@
 #include <vector>
 #include <iostream>
 
-/* ------------------ *
- * --- GMW Client --- *
- * ------------------ */
+class GMWBaseBit;
 
-class GMWClient {
+/* -------------------------- *
+ * --- Replicated Context --- *
+ * -------------------------- */
+
+class RepContext {
 private:
+  std::size_t id_;
   std::vector<std::shared_ptr<Channel>> parties_;
 public:
-  std::size_t NumParties() const;
+  std::size_t Me() const;
   template <typename T>
-  T Rand();
+  void Send(std::size_t id, T);
   template <typename T>
-  void Send(std::size_t party, T v);
-  template <typename T>
-  T Recv(std::size_t client);
+  T Recv(std::size_t id);
 };
 
-/* ----------------- *
- * --- GMW Party --- *
- * ----------------- */
+/* ---------------------------- *
+ * --- Replicated : BaseBit --- *
+ * ---------------------------- */
 
-class GMWParty {
+class RepBaseBit {
+public:
+  using Context = RepContext;
+
+  RepBaseBit()                        = default;
+  RepBaseBit(const RepBaseBit& other) = default;
+  RepBaseBit(RepBaseBit&& other)      = default;
+  ~RepBaseBit()                       = default;
+
+  inline RepBaseBit& operator=(const RepBaseBit& r) = default;
+  inline RepBaseBit& operator=(RepBaseBit&& r)      = default;
+
+  RepBaseBit(bool v) : value_(v) {};
+  static inline bool From(const RepBaseBit& v);
+
+  static inline void       ShareTo(Context& local, Context& group, std::vector<std::size_t> to, const RepBaseBit& v);
+  static inline RepBaseBit ShareFr(Context& local, Context& group, std::vector<std::size_t> fr);
+
+  static inline RepBaseBit Xor(const RepBaseBit& l, const RepBaseBit& r);
+  static inline RepBaseBit And(Context& context, const RepBaseBit& l, const RepBaseBit& r);
 private:
-  std::vector<std::shared_ptr<Channel>> clients_;
+  bool value_;
+};
+
+inline bool RepBaseBit::From(const RepBaseBit& v) {
+  return v.value_;
+}
+
+inline void RepBaseBit::ShareTo(Context& local, Context& group, std::vector<std::size_t> sharees, const RepBaseBit& v) {
+  if (!(local.Me() == 0)) {
+    return;
+  }
+
+  std::size_t num_sharees = sharees.size();
+
+  for (std::size_t i = 0; i < num_sharees; i++) {
+    group.Send(sharees[i], v.value_);
+  }
+}
+
+inline RepBaseBit RepBaseBit::ShareFr(Context& local, Context& group, std::vector<std::size_t> sharers) {
+  return RepBaseBit(group.Recv<bool>(sharers[0]));
+}
+
+inline RepBaseBit RepBaseBit::Xor(const RepBaseBit& l, const RepBaseBit& r) {
+  return RepBaseBit(l.value_ ^ r.value_);
+}
+
+inline RepBaseBit RepBaseBit::And(Context& context, const RepBaseBit& l, const RepBaseBit& r) {
+  return RepBaseBit(l.value_ & r.value_);
+}
+
+/* ------------------- *
+ * --- GMW Context --- *
+ * ------------------- */
+
+class GMWContext {
+private:
+  std::vector<std::shared_ptr<Channel>> parties_;
 public:
   inline bool IAm(std::size_t party);
   template <typename T>
@@ -43,8 +100,7 @@ public:
 
 class GMWBaseBit {
 public:
-  using Client = GMWClient;
-  using Party  = GMWParty;
+  using Context = GMWContext;
 
   GMWBaseBit()                        = default;
   GMWBaseBit(const GMWBaseBit& other) = default;
@@ -54,15 +110,10 @@ public:
   inline GMWBaseBit& operator=(const GMWBaseBit& r) = default;
   inline GMWBaseBit& operator=(GMWBaseBit&& r)      = default;
 
-  static inline void       ShareTo(Client& context, bool b);
-  static inline void       ShareTo(Client& context, const GMWBaseBit& v); // TODO: Should we also take Party& here?
-  static inline GMWBaseBit ShareFr(Party& context, std::size_t client);
-  static inline GMWBaseBit ShareFr(Party& context, std::vector<std::size_t> clients);
-  static inline GMWBaseBit Constant(bool c);
-  static inline void       RevealTo(Party& context, std::size_t client, const GMWBaseBit& v);
-  static inline bool       RevealFr(Client& context);
+  static inline void       ShareTo(Context& local, Context& group, std::vector<std::size_t> to, const GMWBaseBit& v);
+  static inline GMWBaseBit ShareFr(Context& local, Context& group, std::vector<std::size_t> fr);
 
-  static inline GMWBaseBit Xor(Party& context, const GMWBaseBit& l, const GMWBaseBit& r); // TODO: Remove Party& parameter
+  static inline GMWBaseBit Xor(const GMWBaseBit& l, const GMWBaseBit& r);
   static inline GMWBaseBit And(Party& context, const GMWBaseBit& l, const GMWBaseBit& r);
 
   inline bool From() const; // TODO: Remove, just here for testing
