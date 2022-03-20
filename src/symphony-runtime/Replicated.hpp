@@ -3,9 +3,6 @@
 #include "Channel.hpp"
 
 #include "Bit.hpp"
-//#include "BitVector.hpp"
-//#include "UInt.hpp"
-//#include "Int.hpp"
 
 class ReplicatedContext {
 public:
@@ -24,21 +21,15 @@ class ReplicatedBaseBit {
 public:
   using Context = ReplicatedContext;
 
+  static inline ReplicatedBaseBit Embed(bool constant);
   inline void Share(Context& local, Context& group, const std::vector<std::size_t>& sharees) const;
   ReplicatedBaseBit(Context& local, Context& group, const std::vector<std::size_t>& sharers);
-  ReplicatedBaseBit(bool constant);
 
-  inline ReplicatedBaseBit operator^(const ReplicatedBaseBit& other) const;
+  inline ReplicatedBaseBit Xor(Context& context, const ReplicatedBaseBit& other) const;
   inline ReplicatedBaseBit And(Context& context, const ReplicatedBaseBit& other) const;
-
-  inline bool Reveal() const;
 private:
+  ReplicatedBaseBit(bool repr);
   bool repr_;
 };
 
-using ReplicatedBit       = Bit<ReplicatedBaseBit>;
-//using ReplicatedBitVector = BitVector<ReplicatedBit>;
-//using ReplicatedUInt8     = UInt<ReplicatedBaseUInt<8>>;
-//using ReplicatedUInt16    = UInt<ReplicatedBaseUInt<16>>;
-//using ReplicatedUInt32    = UInt<ReplicatedBaseUInt<32>>;
-//using ReplicatedUInt64    = UInt<ReplicatedBaseUInt<64>>;
+using ReplicatedBit = Bit<ReplicatedBaseBit>;

@@ -12,6 +12,14 @@ bool GMWContext::RecvBool(std::size_t id) {
   return comm_[id]->RecvBool();
 }
 
+bool GMWContext::RandBool() {
+  return prg_->RandBool();
+}
+
+inline GMWBaseBit GMWBaseBit::Embed(bool constant) {
+  return GMWBaseBit(true, constant);
+}
+
 inline void GMWBaseBit::Share(Context& local, Context& group, const std::vector<std::size_t>& sharees) const {
   assert(!is_constant_); // Use replicated protocol instead.
   std::size_t num_sharees = sharees.size();
@@ -38,28 +46,32 @@ GMWBaseBit::GMWBaseBit(Context& local, Context& group, const std::vector<std::si
   repr_        = sum;
 }
 
-GMWBaseBit::GMWBaseBit(bool constant) : is_constant_(true), repr_(constant) {};
-
-// TODO: Go back and add Context to all the functions, need it even for XOR to handle correctly
-inline GMWBaseBit GMWBaseBit::operator^(const GMWBaseBit& other) const {
+inline GMWBaseBit GMWBaseBit::Xor(Context& context, const GMWBaseBit& other) const {
   if (is_constant_ && other.is_constant_) {
-    return GMWBaseBit(repr_ ^ other.repr_);
+    return GMWBaseBit(true, repr_ ^ other.repr_);
   }
 
-  if (is_constant_ && !context.IAm(0)) {
-    return r;
+  if (is_constant_ && context.Me() != 0) {
+    return other;
   }
 
-  if (r.is_constant_ && !context.IAm(0)) {
-    return l;
+  if (other.is_constant_ && context.Me() != 0) {
+    return *this;
   }
 
-  return GMWBaseBit(l.share_ ^ r.share_);
-  return GMWBaseBit(repr_ ^ other.repr_);
+  return GMWBaseBit(false, repr_ ^ other.repr_);
 }
 
 inline GMWBaseBit GMWBaseBit::And(Context& context, const GMWBaseBit& other) const {
-  return GMWBaseBit(repr_ & other.repr_);
+  if (is_constant_ && other.is_constant_) {
+    return GMWBaseBit(true, repr_ & other.repr_);
+  }
+
+  if (is_constant_ || other.is_constant_) {
+    return GMWBaseBit(false, repr_ & other.repr_);
+  }
+
+  assert(false); // TODO
 }
 
-GMWBaseBit::GMWBaseBit(bool constant) : repr_(constant) {};
+GMWBaseBit::GMWBaseBit(bool is_constant, bool repr) : is_constant_(is_constant), repr_(repr) {};
