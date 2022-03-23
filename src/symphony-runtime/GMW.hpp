@@ -1,39 +1,48 @@
-#include <cstddef>
+#pragma once
 
-#include "Channel.hpp"
-#include "PRG.hpp"
+#include "Util/PRG.hpp"
+#include "Util/Channel.hpp"
 
-#include "Bit.hpp"
+#include "Traits/Group.hpp"
+#include "Traits/Random.hpp"
+#include "Traits/Comm.hpp"
+#include "Traits/Share.hpp"
 
-class GMWContext {
-public:
-  GMWContext(std::size_t id, std::vector<std::shared_ptr<Channel>> comm, std::shared_ptr<PRG> prg) : id_(id), comm_(comm), prg_(prg) {};
+namespace symphony::runtime {
+  namespace gmw {
+    using namespace util::channel;
+    using namespace util::prg;
 
-  std::size_t Me() const;
-  void Send(std::size_t id, bool b);
-  bool RecvBool(std::size_t b);
-  bool RandBool();
-private:
-  std::size_t id_;
-  std::vector<std::shared_ptr<Channel>> comm_;
-  std::shared_ptr<PRG> prg_;
-};
+    struct Context {
+      std::vector<std::shared_ptr<Channel>> channels;
+      std::unique_ptr<PRG> prg;
+    };
 
-// GMW : BaseBit
-class GMWBaseBit {
-public:
-  using Context = GMWContext;
+    template <typename T>
+    struct Encrypted {
+      T repr;
+      bool is_constant;
+    };
+  }
 
-  static inline GMWBaseBit Embed(bool constant);
-  inline void Share(Context& local, Context& group, const std::vector<std::size_t>& sharees) const;
-  GMWBaseBit(Context& local, Context& group, const std::vector<std::size_t>& sharers);
+  namespace traits::share {
+    using namespace traits::group;
+    using namespace traits::random;
+    using namespace traits::comm;
 
-  inline GMWBaseBit Xor(Context& context, const GMWBaseBit& other) const;
-  inline GMWBaseBit And(Context& context, const GMWBaseBit& other) const;
-private:
-  GMWBaseBit(bool is_constant, bool repr);
-  bool is_constant_;
-  bool repr_;
-};
+    template<typename Clear>
+    void SendEncrypted(const gmw::Context& context, const std::vector<std::size_t>& receivers, const Clear& clear) {
+      std::size_t num_receivers = receivers.size();
 
-using GMWBit = Bit<GMWBaseBit>;
+      Clear sum = Zero<Clear>;
+
+      for (std::size_t i = 1; i < num_receivers; i++) {
+        Clear share = Random<Clear>(*context.prg);
+        Send(*context.channels[receivers[i]], share);
+        sum = Add(sum, share);
+      }
+
+      Send(*context.channels[receivers[0]], Sub(clear, sum));
+    }
+  }
+}
