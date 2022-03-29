@@ -1,3 +1,6 @@
 [submodule "extern/swanky"]
 	path = extern/swanky
 	url = git@github.com:GaloisInc/swanky.git
+[submodule "extern/MOTION"]
+	path = extern/MOTION
+	url = git@github.com:Isweet/MOTION.git
