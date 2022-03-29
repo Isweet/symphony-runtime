@@ -3,6 +3,14 @@
 #include "Channel.hpp"
 #include "PRG.hpp"
 
+template <typename T>
+struct GMW {
+
+}
+
+
+
+
 struct SharingContext {
   inline std::size_t Me() const {
     return id_;

@@ -1,48 +1,82 @@
 #pragma once
 
+#include <cstddef>
+#include <vector>
+
 #include "Util/PRG.hpp"
 #include "Util/Channel.hpp"
+#include "Util/BitVector.hpp"
 
-#include "Traits/Group.hpp"
 #include "Traits/Random.hpp"
 #include "Traits/Comm.hpp"
-#include "Traits/Share.hpp"
 
-namespace symphony::runtime {
-  namespace gmw {
-    using namespace util::channel;
-    using namespace util::prg;
+#include "Backends/MpSpdz.hpp"
 
-    struct Context {
-      std::vector<std::shared_ptr<Channel>> channels;
-      std::unique_ptr<PRG> prg;
-    };
+namespace symphony::mpc::gmw {
+  using namespace util;
+  using namespace traits;
+  using namespace GC;
 
-    template <typename T>
-    struct Encrypted {
-      T repr;
-      bool is_constant;
-    };
+  struct ClientInputContext {
+    std::shared_ptr<PRG> prg;
+    std::vector<std::shared_ptr<Channel>> receivers;
+  };
+
+  struct PartyContext {
+    std::shared_ptr<Channel> client;
+  };
+
+  struct ClientOutputContext {
+    std::vector<std::shared_ptr<Channel>> senders;
+  };
+
+  template <typename T>
+  using Sec = SemiSecret;
+
+  template <>
+  void SendInput(const ClientInputContext& context, const BitVector& input) {
+    std::size_t num_receivers = context.receivers.size();
+
+    BitVector masked = input;
+    for (std::size_t i = 1; i < num_receivers; i++) {
+      BitVector r = Random<BitVector>(*context.prg);
+      Send(*context.receivers[i], r);
+      masked -= r;
+    }
+
+    Send(*context.receivers[0], masked);
   }
 
-  namespace traits::share {
-    using namespace traits::group;
-    using namespace traits::random;
-    using namespace traits::comm;
+  Sec<BitVector> RecvInput(const PartyContext& context) {
+    return static_cast<SemiSecret>(Recv<BitVector>(*context.client));
+  }
 
-    template<typename Clear>
-    void SendEncrypted(const gmw::Context& context, const std::vector<std::size_t>& receivers, const Clear& clear) {
-      std::size_t num_receivers = receivers.size();
+  void SendOutput(const PartyContext& context, const Sec<BitVector>& output) {
+    Send(*context.client, static_cast<BitVector>(output));
+  }
 
-      Clear sum = Zero<Clear>;
+  BitVector RecvOutput(const ClientOutputContext& context) {
+    BitVector ret(CHAR_BIT * sizeof(long));
 
-      for (std::size_t i = 1; i < num_receivers; i++) {
-        Clear share = Random<Clear>(*context.prg);
-        Send(*context.channels[receivers[i]], share);
-        sum = Add(sum, share);
-      }
-
-      Send(*context.channels[receivers[0]], Sub(clear, sum));
+    for (auto sender : context.senders) {
+      ret += Recv<BitVector>(*sender);
     }
+
+    return ret;
+  }
+
+  // Each party i involved in P2 chooses random mask ri
+  // Each party i calls P1.share(ri)
+  // x <- P1.reveal(st + r0 + r1)
+  // P2.share(x)
+  // P2.share(ri)
+  // P2: compute x - r0 - r1
+
+  void SendReshare(const InputContext& context, const Sec<BitVector>& shared) {
+    ...
+  }
+
+  Sec<BitVector> RecvReshare(const OutputContext& context) {
+    ...
   }
 }

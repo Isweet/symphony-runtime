@@ -2,8 +2,8 @@
 
 #include "../Util/PRG.hpp"
 
-namespace symphony::runtime::traits::random {
-  using namespace util::prg;
+namespace symphony::traits {
+  using namespace util;
 
   template <typename T>
   T Random(PRG&);

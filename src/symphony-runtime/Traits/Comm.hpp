@@ -2,8 +2,8 @@
 
 #include "../Util/Channel.hpp"
 
-namespace symphony::runtime::traits::comm {
-  using namespace util::channel;
+namespace symphony::traits {
+  using namespace util;
 
   template <typename T>
   void Send(Channel&, T);

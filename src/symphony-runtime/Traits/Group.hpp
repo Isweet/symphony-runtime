@@ -1,6 +1,6 @@
 #pragma once
 
-namespace symphony::runtime::traits::group {
+namespace symphony::traits {
   template <typename T>
   const T Zero;
 

@@ -5,7 +5,7 @@
 
 #include "Channel.hpp"
 
-namespace symphony::runtime::util::channel {
+namespace symphony::util {
   struct LocalChannel : Channel {
     std::vector<std::byte> buf;
     void SendBytes(std::span<const std::byte> bytes) {
