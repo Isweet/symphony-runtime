@@ -1,5 +1,3 @@
-use bincode::deserialize_from;
-use bincode::serialize_into;
 use bitvec::prelude::*;
 use bitvec::vec::BitVec;
 use rand::CryptoRng;
@@ -8,51 +6,93 @@ use std::io::Read;
 use std::io::Write;
 use std::ops::*;
 
-pub struct BV(pub BitVec<usize, Lsb0>);
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct BV(BitVec<u8, Lsb0>);
 
 impl BV {
-    pub fn zero(len: usize) -> BV {
-        let mut ret = BitVec::with_capacity(len);
-        for _ in 0..len {
-            ret.push(false);
-        }
-        BV(ret)
+    pub fn new() -> Self {
+        Self(BitVec::new())
     }
 
-    pub fn one(len: usize) -> BV {
-        let mut ret = BitVec::with_capacity(len);
-        for _ in 0..len {
-            ret.push(true);
-        }
-        BV(ret)
+    pub fn with_capacity(len: usize) -> Self {
+        Self(BitVec::with_capacity(len))
     }
 
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    pub fn random<RNG: CryptoRng + Rng>(prg: &mut RNG, length: usize) -> BV {
-        let mut ret = BitVec::with_capacity(length);
-        for _ in 0..length {
-            ret.push(prg.gen());
-        }
-        BV(ret)
+    pub fn serialize_len(&self) -> [u8; 8] {
+        self.0.len().to_le_bytes()
+    }
+
+    pub fn repeat(bit: bool, len: usize) -> Self {
+        BV(BitVec::repeat(bit, len))
+    }
+
+    pub fn fill(&mut self, value: bool) {
+        self.0.fill(value);
+    }
+
+    pub fn fill_with<F: FnMut(usize) -> bool>(&mut self, f: F) {
+        self.0.fill_with(f);
+    }
+
+    pub fn zero(len: usize) -> Self {
+        Self::repeat(false, len)
+    }
+
+    pub fn one(len: usize) -> Self {
+        Self::repeat(true, len)
+    }
+
+    pub fn randomize<RNG: Rng + CryptoRng>(&mut self, prg: &mut RNG) {
+        self.fill_with(|_| prg.gen())
+    }
+
+    pub fn random<RNG: Rng + CryptoRng>(len: usize, prg: &mut RNG) -> Self {
+        let mut ret = Self::zero(len);
+        ret.randomize(prg);
+        ret
+    }
+
+    pub fn serialize_data(&self) -> &[u8] {
+        self.0.as_raw_slice()
     }
 
     pub fn send<C: Write>(&self, receiver: &mut C) {
-        let bits: Vec<bool> = self.clone().into();
-        serialize_into(receiver, &bits).unwrap()
+        receiver.write_all(&self.serialize_len()).unwrap();
+        receiver.write_all(self.0.as_raw_slice()).unwrap();
     }
 
     pub fn recv<C: Read>(sender: &mut C) -> Self {
-        let bits: Vec<bool> = deserialize_from(sender).unwrap();
-        bits.into()
+        let mut len_serialized: [u8; 8] = [0; 8];
+        sender.read_exact(&mut len_serialized).unwrap();
+        let len = usize::from_le_bytes(len_serialized);
+        let mut ret = Self::zero(len);
+        sender.read_exact(ret.0.as_raw_mut_slice()).unwrap();
+        ret
+    }
+
+    pub fn append(&mut self, other: &mut BV) {
+        self.0.append(&mut other.0);
     }
 }
 
-impl Clone for BV {
-    fn clone(&self) -> Self {
-        BV(self.0.clone())
+impl std::fmt::Display for BV {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<Idx> Index<Idx> for BV
+where
+    BitVec<u8, Lsb0>: Index<Idx>,
+{
+    type Output = <BitVec<u8, Lsb0> as Index<Idx>>::Output;
+
+    fn index(&self, index: Idx) -> &Self::Output {
+        &self.0[index]
     }
 }
 
@@ -70,28 +110,40 @@ impl BitXorAssign for BV {
     }
 }
 
+impl BitXorAssign<&Self> for BV {
+    fn bitxor_assign(&mut self, rhs: &Self) {
+        self.0 ^= &rhs.0;
+    }
+}
+
+impl From<bool> for BV {
+    fn from(item: bool) -> Self {
+        let mut ret = BitVec::with_capacity(1);
+        ret.push(item);
+        BV(ret)
+    }
+}
+
+impl From<BV> for bool {
+    fn from(item: BV) -> Self {
+        assert_eq!(item.len(), 1);
+        item[0]
+    }
+}
+
 impl From<u32> for BV {
     fn from(item: u32) -> Self {
-        let mut ret = bitvec![0; u32::BITS as usize];
-        ret.store_le(item);
-        BV(ret)
+        let mut ret = BV::zero(u32::BITS as usize);
+        ret.0.store_le(item);
+        ret
     }
 }
 
 impl From<BV> for u32 {
     fn from(item: BV) -> Self {
+        assert_eq!(item.len(), u32::BITS as usize);
         item.0.load_le()
     }
 }
 
-impl From<Vec<bool>> for BV {
-    fn from(item: Vec<bool>) -> Self {
-        BV(item.iter().collect())
-    }
-}
-
-impl From<BV> for Vec<bool> {
-    fn from(item: BV) -> Self {
-        item.0.iter().by_vals().collect()
-    }
-}
+// TODO(ins): How to handle vectors?

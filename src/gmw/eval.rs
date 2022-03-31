@@ -22,10 +22,11 @@ impl<RNG: Rng + CryptoRng, W: Write, T: Share> SecSendInput<T> for InputClient<R
         let mut masked: BV = input.into();
         let input_len = masked.len();
 
+        let mut share = BV::zero(input_len);
         for receiver in self.receivers.iter_mut().skip(1) {
-            let share = BV::random(&mut self.prg, input_len);
+            share.randomize(&mut self.prg);
             share.send(receiver);
-            masked ^= share;
+            masked ^= &share;
         }
 
         masked.send(&mut self.receivers[0]);
@@ -158,9 +159,6 @@ mod tests {
         let bv1 = recv_ctx1.sec_recv_input();
         let bv2 = recv_ctx2.sec_recv_input();
 
-        println!("{:?}", bv1.0);
-        println!("{:?}", bv2.0);
-
         let mut send_ctx1 = OutputServer {
             receiver: &mut channel1,
         };
@@ -187,7 +185,15 @@ mod tests {
     }
 
     #[test]
+    fn send_recv_bit() {
+        send_recv(false);
+    }
+
+    #[test]
     fn send_recv_bits() {
-        send_recv(vec![false, true, false]);
+        let mut prg = AesRng::new();
+        for i in 0..=128 {
+            send_recv(BV::random(i, &mut prg));
+        }
     }
 }
