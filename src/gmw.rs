@@ -1,21 +1,14 @@
-use bitvec::prelude::*;
-use rand::CryptoRng;
-use rand::Rng;
-use std::io::Read;
-use std::io::Write;
+pub mod eval;
 
+use crate::bitvec::*;
+
+pub trait Share: From<BV> + Into<BV> {}
+
+impl Share for Vec<bool> {}
+impl Share for u32 {}
+
+/*
 pub type BV = BitVec;
-
-fn serialize<W: Write>(w: &mut W, bv: &BV) {
-    // Turn length into [u8; 8] with usize::to_le_bytes()
-    // Turn the `bv` into a Vec<u8> ... somehow
-    // Send em over the channel
-    todo!();
-}
-
-fn deserialize<R: Read>(r: &mut R) -> BV {
-    todo!();
-}
 
 pub fn send_share<RNG: CryptoRng + Rng, C: Write>(prg: &mut RNG, channels: &mut [C], input: BV) {
     let num_receivers = channels.len();
@@ -25,23 +18,29 @@ pub fn send_share<RNG: CryptoRng + Rng, C: Write>(prg: &mut RNG, channels: &mut 
     let mut share = bitvec![0; 3];
     for chan in channels.iter_mut().take(num_receivers).skip(1) {
         share.fill_with(|_| prg.gen::<bool>());
-        serialize(chan, &share);
+        serialize_into(chan, &bv_to_vec_bool(&share)).unwrap();
         masked ^= &share;
     }
 
-    serialize(&mut channels[0], &masked);
+    serialize_into(&mut channels[0], &bv_to_vec_bool(&masked)).unwrap();
 }
 
 pub struct Share(BV);
 
 pub fn recv_share<C: Read>(channel: &mut C) -> Share {
-    Share(deserialize(channel))
+    Share(bv_from_vec_bool(deserialize_from(channel).unwrap()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use scuttlebutt::AesRng;
+
+    #[test]
+    fn serialization_size() {
+        let bv = bitvec![0; 8];
+        assert_eq!(bincode::serialize(&bv_to_vec_bool(&bv)).unwrap().len(), 16);
+    }
 
     #[test]
     fn send_recv_share() {
@@ -57,8 +56,7 @@ mod tests {
         let Share(share1) = recv_share(&mut channel1.as_slice());
         let Share(share2) = recv_share(&mut channel2.as_slice());
         let result = share1 ^ share2;
-        assert_eq!(result[0], expected[0]);
-        assert_eq!(result[1], expected[1]);
-        assert_eq!(result[2], expected[2]);
+        assert_eq!(result, expected);
     }
 }
+*/
