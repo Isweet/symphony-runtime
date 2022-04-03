@@ -10,3 +10,4 @@ scuttlebutt = { path = "extern/swanky/scuttlebutt" }
 rand = "0.7"
 anyhow = "1.0.56"
 bitvec = "1.0.0"
+integer-encoding = "3.0.3"

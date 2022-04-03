@@ -1,3 +1,4 @@
-mod bitvec;
 pub mod gmw;
-pub mod sec;
+mod motion;
+pub mod util;
+pub mod party;
