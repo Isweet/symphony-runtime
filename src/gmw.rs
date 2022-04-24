@@ -22,7 +22,7 @@ pub mod ffi {
         len_chans: usize,
         chans: *const *mut dyn Channel,
     ) -> *mut GMW {
-        todo!()
+        Box::into_raw(Box::new(GMW {}))
     }
 
     type SecBool = <GMW as Sec<bool>>::Item;
@@ -33,40 +33,51 @@ pub mod ffi {
     }
 
     #[no_mangle]
-    pub extern "C" fn gmw_share_send_bool(
+    pub unsafe extern "C" fn gmw_share_send_bool(
         prg: *mut AesRng,
         len_chans: usize,
-        chans: *const *mut dyn Channel,
+        chans: *const *mut Box<dyn Channel>,
         input: bool,
     ) {
-        todo!()
+        for i in 0..len_chans {
+            (**chans.add(i)).write_all(&[input as u8]);
+        }
     }
 
     #[no_mangle]
-    pub extern "C" fn gmw_share_recv_bool(this: *mut GMW, chan: *mut dyn Channel) -> *mut SecBool {
-        todo!()
-    }
-
-    #[no_mangle]
-    pub extern "C" fn gmw_reveal_send_bool(
+    pub unsafe extern "C" fn gmw_share_recv_bool(
         this: *mut GMW,
-        chan: *mut dyn Channel,
+        chan: *mut Box<dyn Channel>,
+    ) -> *mut SecBool {
+        let mut buf = [0u8; 1];
+        (*chan).read_exact(&mut buf);
+        Box::into_raw(Box::new(buf[0] != 0))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_reveal_send_bool(
+        this: *mut GMW,
+        chan: *mut Box<dyn Channel>,
         output: *mut SecBool,
     ) {
-        todo!()
+        (*chan).write_all(&[*output as u8]);
     }
 
     #[no_mangle]
-    pub extern "C" fn gmw_reveal_recv_bool(
+    pub unsafe extern "C" fn gmw_reveal_recv_bool(
         len_chans: usize,
-        chans: *const *mut dyn Channel,
+        chans: *const *mut Box<dyn Channel>,
     ) -> bool {
-        todo!()
+        let mut buf = [0u8; 1];
+        for i in 0..len_chans {
+            (**chans.add(i)).read_exact(&mut buf);
+        }
+        buf[0] != 0
     }
 
     #[no_mangle]
     pub extern "C" fn gmw_lit_bool(this: *mut GMW, lit: bool) -> *mut SecBool {
-        todo!()
+        Box::into_raw(Box::new(lit))
     }
 
     #[no_mangle]
@@ -75,14 +86,7 @@ pub mod ffi {
         a: *const SecBool,
         b: *const SecBool,
     ) -> *const SecBool {
-        let this_safe = Box::from_raw(this);
-        let a_safe = Box::from_raw(a as *mut SecBool);
-        let b_safe = Box::from_raw(b as *mut SecBool);
-        let ret: Box<bool> = todo!();
-        Box::into_raw(this_safe);
-        Box::into_raw(a_safe);
-        Box::into_raw(b_safe);
-        Box::into_raw(ret)
+        Box::into_raw(Box::new(*a && *b))
     }
 }
 /*

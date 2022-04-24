@@ -12,7 +12,10 @@ pub mod ffi {
     use super::*;
     use libc::c_char;
     use std::ffi::CStr;
+    use std::net::Ipv4Addr;
+    use std::net::SocketAddr;
     use std::net::TcpListener;
+    use std::time::Duration;
 
     #[no_mangle]
     pub unsafe extern "C" fn channel_destroy(this: *mut Box<dyn Channel>) {
@@ -24,9 +27,13 @@ pub mod ffi {
         addr: *const c_char,
         port: u16,
     ) -> *mut Box<dyn Channel> {
-        let addr_safe = CStr::from_ptr(addr).to_str().unwrap();
-        let mut stream = TcpStream::connect((addr_safe, port)).unwrap();
-        let chan = Box::new(stream);
+        let addr_str = CStr::from_ptr(addr).to_str().unwrap();
+        let addr = SocketAddr::from((addr_str.parse::<Ipv4Addr>().unwrap(), port));
+        let mut stream = None;
+        while stream.is_none() {
+            stream = TcpStream::connect(&addr).ok();
+        }
+        let chan = Box::new(stream.unwrap());
         Box::into_raw(Box::new(chan))
     }
 
@@ -35,8 +42,8 @@ pub mod ffi {
         addr: *const c_char,
         port: u16,
     ) -> *mut Box<dyn Channel> {
-        let addr_safe = CStr::from_ptr(addr).to_str().unwrap();
-        let listener = TcpListener::bind((addr_safe, port)).unwrap();
+        let addr_str = CStr::from_ptr(addr).to_str().unwrap();
+        let listener = TcpListener::bind((addr_str, port)).unwrap();
         let stream = listener.accept().unwrap().0;
         let chan = Box::new(stream);
         Box::into_raw(Box::new(chan))
