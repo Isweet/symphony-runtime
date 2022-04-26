@@ -1,58 +1,123 @@
+use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::net::TcpStream;
+use std::os::unix::prelude::AsRawFd;
+use std::rc::Rc;
 
-pub trait Channel: Read + Write {}
+type LocalStream = Cursor<Vec<u8>>;
+type LocalStreamRef = Rc<RefCell<LocalStream>>;
+type TcpStreamRef = Rc<RefCell<TcpStream>>;
 
-impl Channel for TcpStream {}
-impl Channel for Cursor<Vec<u8>> {}
+#[derive(Debug, Clone)]
+pub enum Channel {
+    Local(LocalStreamRef),
+    Tcp(TcpStreamRef),
+}
+
+impl Drop for Channel {
+    fn drop(&mut self) {
+        match self {
+            Channel::Local(_) => (),
+            Channel::Tcp(tcp) => {
+                let x = &*tcp.borrow_mut();
+                println!(
+                    "Drop TCP: {:?} {:?}",
+                    x.as_raw_fd(),
+                    Rc::strong_count(&*tcp)
+                );
+            }
+        }
+    }
+}
+
+impl Channel {
+    pub fn new_local() -> Self {
+        Channel::Local(Rc::new(RefCell::new(Cursor::new(Vec::new()))))
+    }
+
+    pub fn new_tcp(tcp: TcpStream) -> Self {
+        Channel::Tcp(Rc::new(RefCell::new(tcp)))
+    }
+}
+
+impl Read for Channel {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Channel::Local(l) => (*l.borrow_mut()).read(buf),
+            Channel::Tcp(s) => (*s.borrow_mut()).read(buf),
+        }
+    }
+}
+
+impl Write for Channel {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Channel::Local(l) => (*l.borrow_mut()).write(buf),
+            Channel::Tcp(s) => (*s.borrow_mut()).write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Channel::Local(l) => (*l.borrow_mut()).flush(),
+            Channel::Tcp(s) => (*s.borrow_mut()).flush(),
+        }
+    }
+}
+
+impl TryInto<Rc<RefCell<TcpStream>>> for Channel {
+    type Error = ();
+    fn try_into(self) -> Result<Rc<RefCell<TcpStream>>, Self::Error> {
+        match &self {
+            Channel::Local(_) => Err(()),
+            Channel::Tcp(s) => Ok(s.clone()),
+        }
+    }
+}
 
 pub mod ffi {
     use super::*;
     use libc::c_char;
     use std::ffi::CStr;
-    use std::net::Ipv4Addr;
-    use std::net::SocketAddr;
     use std::net::TcpListener;
-    use std::time::Duration;
 
     #[no_mangle]
-    pub unsafe extern "C" fn channel_destroy(this: *mut Box<dyn Channel>) {
-        Box::from_raw(this);
+    pub unsafe extern "C" fn channel_new_local() -> *mut Channel {
+        let ret = Channel::new_local();
+        Box::into_raw(Box::new(ret))
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn tcp_channel_create_client(
-        addr: *const c_char,
+    pub unsafe extern "C" fn channel_new_tcp_client(
+        host: *const c_char,
         port: u16,
-    ) -> *mut Box<dyn Channel> {
-        let addr_str = CStr::from_ptr(addr).to_str().unwrap();
-        let addr = SocketAddr::from((addr_str.parse::<Ipv4Addr>().unwrap(), port));
+    ) -> *mut Channel {
+        let host_str = CStr::from_ptr(host).to_str().expect("TODO");
         let mut stream = None;
         while stream.is_none() {
-            stream = TcpStream::connect(&addr).ok();
+            stream = TcpStream::connect((host_str, port)).ok();
         }
-        let chan = Box::new(stream.unwrap());
-        Box::into_raw(Box::new(chan))
+        let ret = Channel::new_tcp(stream.unwrap());
+        Box::into_raw(Box::new(ret))
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn tcp_channel_create_server(
-        addr: *const c_char,
+    pub unsafe extern "C" fn channel_new_tcp_server(
+        host: *const c_char,
         port: u16,
-    ) -> *mut Box<dyn Channel> {
-        let addr_str = CStr::from_ptr(addr).to_str().unwrap();
-        let listener = TcpListener::bind((addr_str, port)).unwrap();
-        let stream = listener.accept().unwrap().0;
-        let chan = Box::new(stream);
-        Box::into_raw(Box::new(chan))
+    ) -> *mut Channel {
+        let host_str = CStr::from_ptr(host).to_str().unwrap();
+        let listener = TcpListener::bind((host_str, port)).unwrap();
+        let stream = listener.accept().expect("TODO").0;
+        let ret = Channel::new_tcp(stream);
+        Box::into_raw(Box::new(ret))
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn local_channel_create() -> *mut Box<dyn Channel> {
-        let buf = Cursor::new(Vec::new());
-        let chan = Box::new(buf);
-        Box::into_raw(Box::new(chan))
+    pub unsafe extern "C" fn channel_drop(this: *mut Channel) {
+        Box::from_raw(this);
     }
 }

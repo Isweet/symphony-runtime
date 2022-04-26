@@ -1,5 +1,6 @@
 mod channel;
 mod prg;
+mod util;
 
 mod api;
 mod gmw;
@@ -7,6 +8,8 @@ mod gmw;
 pub use crate::channel::ffi::*;
 pub use crate::gmw::ffi::*;
 pub use crate::prg::ffi::*;
+pub use crate::util::ffi::*;
+pub mod motion;
 
 /*
 pub use channel::{

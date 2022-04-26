@@ -1,290 +1,190 @@
-use crate::api::*;
+use crate::channel::*;
+use std::cell::RefCell;
+use std::net::TcpStream;
+use std::rc::Rc;
 
-pub struct GMW {}
+use std::io::{Read, Write};
 
-impl Sec<bool> for GMW {
-    type Item = bool;
+use rand::{CryptoRng, Rng};
+
+use crate::*;
+
+pub struct Protocol {
+    repr: motion::Backend,
+}
+
+impl Protocol {
+    pub fn new(my_id: usize, channels: Vec<Channel>) -> Self {
+        let mut others_tcp_streams = Vec::with_capacity(channels.len() - 1);
+        println!("I am {:?}, {:?}", my_id, channels);
+
+        for (id, channel) in channels.into_iter().enumerate() {
+            if id == my_id {
+                continue;
+            }
+            let tcp: Rc<RefCell<TcpStream>> = channel.try_into().expect("TODO");
+            println!("{:?}", tcp);
+            others_tcp_streams.push(tcp);
+        }
+
+        Self {
+            repr: motion::Backend::new(my_id, &others_tcp_streams),
+        }
+    }
+}
+
+pub struct Bool {
+    repr: motion::Bool,
+}
+
+impl Bool {
+    pub fn new(protocol: &mut Protocol, share: bool) -> Self {
+        Self {
+            repr: motion::Bool::new(&mut protocol.repr, share),
+        }
+    }
+
+    pub fn constant(protocol: &mut Protocol, value: bool) -> Self {
+        Self {
+            repr: motion::Bool::constant(&mut protocol.repr, value),
+        }
+    }
+
+    pub fn and(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Self {
+        Self {
+            repr: motion::Bool::and(&mut protocol.repr, &mut a.repr, &mut b.repr),
+        }
+    }
+
+    pub fn reify(protocol: &mut Protocol, value: &mut Self) -> bool {
+        motion::Bool::reify(&mut protocol.repr, &mut value.repr)
+    }
+}
+
+pub fn share_send_bool<Prg: Rng + CryptoRng, W: Write>(
+    prg: &mut Prg,
+    channels: &mut [&mut W],
+    clear: bool,
+) {
+    let mut masked = clear;
+
+    for c in channels.iter_mut().skip(1) {
+        let share: bool = prg.gen();
+        util::write_bool(c, share).expect("TODO");
+        masked ^= share;
+    }
+
+    util::write_bool(channels[0], masked).expect("TODO")
+}
+
+pub fn share_recv_bool<R: Read>(channel: &mut R) -> bool {
+    util::read_bool(channel).expect("TODO")
+}
+
+pub fn reveal_send_bool<W: Write>(channel: &mut W, share: bool) {
+    util::write_bool(channel, share).expect("TODO")
+}
+
+pub fn reveal_recv_bool<R: Read>(channels: &mut [&mut R]) -> bool {
+    channels.iter_mut().fold(false, |acc, channel| {
+        acc ^ util::read_bool(channel).expect("TODO")
+    })
 }
 
 pub mod ffi {
     use super::*;
-    use crate::channel::Channel;
+    use crate::util::ffi::*;
     use scuttlebutt::AesRng;
 
-    #[no_mangle]
-    pub unsafe extern "C" fn gmw_delete(this: *mut GMW) {
-        Box::from_raw(this);
-    }
+    // GMW Protocol
 
     #[no_mangle]
-    pub extern "C" fn gmw_create(
+    pub unsafe extern "C" fn gmw_protocol_new(
         id: usize,
-        len_chans: usize,
-        chans: *const *mut dyn Channel,
-    ) -> *mut GMW {
-        Box::into_raw(Box::new(GMW {}))
+        channels: *const *const Channel,
+        channels_len: usize,
+    ) -> *mut Protocol {
+        let channels = c_to_vec(channels, channels_len)
+            .into_iter()
+            .map(|channel| (&*channel).clone())
+            .collect();
+        let ret = Protocol::new(id, channels);
+        Box::into_raw(Box::new(ret))
     }
-
-    type SecBool = <GMW as Sec<bool>>::Item;
 
     #[no_mangle]
-    pub unsafe extern "C" fn gmw_bool_delete(this: *mut SecBool) {
-        Box::from_raw(this);
+    pub unsafe extern "C" fn gmw_protocol_drop(protocol: *mut Protocol) {
+        Box::from_raw(protocol);
     }
+
+    // GMW Boolean Shares
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_bool_new(protocol: *mut Protocol, share: bool) -> *mut Bool {
+        let ret = Bool::new(&mut *protocol, share);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_bool_constant(protocol: *mut Protocol, value: bool) -> *mut Bool {
+        let ret = Bool::constant(&mut *protocol, value);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_bool_and(
+        protocol: *mut Protocol,
+        a: *mut Bool,
+        b: *mut Bool,
+    ) -> *mut Bool {
+        let ret = Bool::and(&mut *protocol, &mut *a, &mut *b);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_bool_reify(protocol: *mut Protocol, value: *mut Bool) -> bool {
+        Bool::reify(&mut *protocol, &mut *value)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_bool_drop(share: *mut Bool) {
+        Box::from_raw(share);
+    }
+
+    // GMW Utilities
 
     #[no_mangle]
     pub unsafe extern "C" fn gmw_share_send_bool(
         prg: *mut AesRng,
-        len_chans: usize,
-        chans: *const *mut Box<dyn Channel>,
-        input: bool,
+        channels: *mut *mut Channel,
+        channels_len: usize,
+        clear: bool,
     ) {
-        for i in 0..len_chans {
-            (**chans.add(i)).write_all(&[input as u8]);
-        }
+        let prg = &mut *prg;
+        let channels: &mut [&mut Channel] =
+            std::mem::transmute(std::slice::from_raw_parts_mut(channels, channels_len));
+        share_send_bool(prg, channels, clear)
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn gmw_share_recv_bool(
-        this: *mut GMW,
-        chan: *mut Box<dyn Channel>,
-    ) -> *mut SecBool {
-        let mut buf = [0u8; 1];
-        (*chan).read_exact(&mut buf);
-        Box::into_raw(Box::new(buf[0] != 0))
+    pub unsafe extern "C" fn gmw_share_recv_bool(channel: *mut Channel) -> bool {
+        let channel = &mut *channel;
+        share_recv_bool(channel)
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn gmw_reveal_send_bool(
-        this: *mut GMW,
-        chan: *mut Box<dyn Channel>,
-        output: *mut SecBool,
-    ) {
-        (*chan).write_all(&[*output as u8]);
+    pub unsafe extern "C" fn gmw_reveal_send_bool(channel: *mut Channel, share: bool) {
+        let channel = &mut *channel;
+        reveal_send_bool(channel, share)
     }
 
     #[no_mangle]
     pub unsafe extern "C" fn gmw_reveal_recv_bool(
-        len_chans: usize,
-        chans: *const *mut Box<dyn Channel>,
+        channels: *mut *mut Channel,
+        channels_len: usize,
     ) -> bool {
-        let mut buf = [0u8; 1];
-        for i in 0..len_chans {
-            (**chans.add(i)).read_exact(&mut buf);
-        }
-        buf[0] != 0
-    }
-
-    #[no_mangle]
-    pub extern "C" fn gmw_lit_bool(this: *mut GMW, lit: bool) -> *mut SecBool {
-        Box::into_raw(Box::new(lit))
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn gmw_and_bool(
-        this: *mut GMW,
-        a: *const SecBool,
-        b: *const SecBool,
-    ) -> *const SecBool {
-        Box::into_raw(Box::new(*a && *b))
+        let channels: &mut [&mut Channel] =
+            std::mem::transmute(std::slice::from_raw_parts_mut(channels, channels_len));
+        reveal_recv_bool(channels)
     }
 }
-/*
-use rand::CryptoRng;
-use rand::Rng;
-
-use libc::size_t;
-use scuttlebutt::AesRng;
-use std::borrow::BorrowMut;
-use std::cell::RefCell;
-use std::io::Read;
-use std::io::Write;
-use std::rc::Rc;
-
-impl<Prg: Rng + CryptoRng> SecIO<Prg, bool> for GMW {
-    fn send_input(prg: &mut Prg, parties: &mut Vec<Box<dyn Write>>, input: &bool) {
-        todo!()
-    }
-
-    fn recv_input(&mut self, client: &mut Box<dyn Read>) -> Self::Item {
-        todo!()
-    }
-
-    fn send_input_secure(prg: &mut Prg, parties: &mut Vec<Box<dyn Write>>, input: &Self::Item) {
-        todo!()
-    }
-
-    fn recv_input_secure(&mut self, clients: &mut Vec<Box<dyn Read>>) -> Self::Item {
-        todo!()
-    }
-
-    fn send_output(&mut self, client: &mut Box<dyn Write>, output: &Self::Item) {
-        todo!()
-    }
-
-    fn recv_output(parties: &mut Vec<Box<dyn Read>>) -> bool {
-        todo!()
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn gmw_send_input_bool(
-    prg: *mut AesRng,
-    size_parties: libc::size_t,
-    parties: *const *mut dyn Write,
-    input: &bool,
-) {
-    let mut parties_vec = Vec::with_capacity(size_parties);
-    for i in 0..size_parties {
-        let write = *parties.add(i);
-        parties_vec.push(Box::from_raw(write));
-    }
-
-    GMW::send_input(prg.as_mut().unwrap(), &mut parties_vec, input);
-
-    for w in parties_vec {
-        Box::into_raw(w);
-    }
-}
-
-/*
-
-use std::io::{Read, Write};
-use std::rc::Rc;
-
-use once_cell::unsync::Lazy;
-use rand::{CryptoRng, Rng};
-
-use crate::api::*;
-
-pub struct GMW {}
-
-
-
-
-
-#[no_mangle]
-pub unsafe extern "C" fn send_input_bool(prg: *mut Prg, parties: , input: &bool) {
-    GMW::send_input(Box::from_raw(prg), Box::input)
-}
-
-impl GMW {
-    pub fn send_input_
-}
-
-
-
-pub struct GMW {
-    backend: Motion,
-}
-
-impl GMW {}
-
-impl Sec<bool> for GMW {
-    type Item = Rc<Lazy<bool>>;
-}
-
-// TODO(ins): SecIO<bool> for GMW
-
-impl SecLit<bool> for GMW {
-    fn sec_lit(&mut self, constant: &bool) -> Self::Item {
-        let mut g = self.backend.const_bool_gate(*constant);
-        Rc::new(Lazy::new(|| g.eval()))
-    }
-}
-
-pub type Secure = BitVec;
-
-pub fn send_input<RNG: Rng + CryptoRng, T: Into<Secure>>(
-    prg: &mut RNG,
-    parties: &mut Vec<Box<dyn Write>>,
-    input: T,
-) {
-    let mut masked = input.into();
-    let len = masked.len();
-
-    for party in parties.iter_mut().skip(1) {
-        let share = BitVec::random(prg, len);
-        share.write(party);
-        masked ^= &share;
-    }
-
-    masked.write(&mut parties[0]);
-}
-
-pub struct GMW {}
-
-impl GMW {
-    pub fn recv_input(&mut self, client: &mut Box<dyn Read>) -> Rc<Lazy<Secure>> {
-        Secure::read(client)
-        //        self.shared_in(share)
-    }
-}
-
-// TODO(ins): Client API is protocol specific
-//  but MPC should be able to be generic. Let's try that today.
-
-/*
-pub type PartyId = usize;
-const PARTY_SIZE: usize = u16::MAX as usize;
-pub type GMWShare = BV;
-
-pub struct Party<RNG: Rng + CryptoRng> {
-    me: PartyId,
-    prg: RNG,
-    channels: Vec<Box<dyn Channel>>,
-}
-
-impl<RNG: Rng + CryptoRng> Party<RNG> {
-    pub fn new(me: PartyId, prg: RNG, channels: Vec<Box<dyn Channel>>) -> Self {
-        debug_assert!(channels.len() <= PARTY_SIZE);
-        Self { me, prg, channels }
-    }
-
-    pub fn num_parties(&self) -> usize {
-        self.channels.len()
-    }
-
-    fn valid_id(&self, id: PartyId) -> bool {
-        id < self.num_parties()
-    }
-
-    fn send_input<T: Into<GMWShare>>(&mut self, receiver_ids: Vec<PartyId>, input: T) {
-        debug_assert!(receiver_ids
-            .iter()
-            .all(|receiver_id| self.valid_id(*receiver_id)));
-    }
-
-    pub fn send_input_bool(&mut self, receiver_ids: Vec<PartyId>, input: bool) {
-        self.send_input(receiver_ids, input);
-    }
-
-    pub fn recv_input(&mut self, sender_id: PartyId) -> GMWShare {
-        debug_assert!(self.valid_id(sender_id));
-
-        GMWShare::recv(&mut self.channels[sender_id])
-    }
-
-    pub fn send_output(&mut self, receiver_id: PartyId, output: GMWShare) {
-        debug_assert!(self.valid_id(receiver_id));
-
-        output.send(&mut self.channels[receiver_id])
-    }
-
-    fn recv_output<T: From<GMWShare>>(&mut self, sender_ids: Vec<PartyId>) -> T {
-        debug_assert!(sender_ids.iter().all(|sender_id| self.valid_id(*sender_id)));
-
-        let mut clear = GMWShare::recv(&mut self.channels[sender_ids[0]]);
-        for sender_id in sender_ids.iter().skip(1) {
-            clear ^= GMWShare::recv(&mut self.channels[*sender_id]);
-        }
-        clear.into()
-    }
-
-    pub fn recv_output_bool(&mut self, sender_ids: Vec<PartyId>) -> bool {
-        self.recv_output(sender_ids)
-    }
-}
-*/
-*/
-*/
