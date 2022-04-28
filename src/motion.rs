@@ -6,21 +6,19 @@ use std::rc::Rc;
 
 pub struct Backend {
     my_id: usize,
-    others_tcp_sockets: Vec<RawFd>,
+    hosts: Vec<String>,
+    ports: Vec<u16>,
     delayed: Vec<CachedBoolRef>,
     party: Party,
 }
 
 impl Backend {
-    pub fn new(my_id: usize, others_tcp_streams: &[Rc<RefCell<TcpStream>>]) -> Self {
-        let others_tcp_sockets: Vec<RawFd> = others_tcp_streams
-            .iter()
-            .map(|s| s.borrow().as_raw_fd())
-            .collect();
-        let party = Party::new(my_id, &others_tcp_sockets);
+    pub fn new(my_id: usize, hosts: Vec<String>, ports: Vec<u16>) -> Self {
+        let party = Party::new(my_id, &hosts, &ports);
         Self {
             my_id,
-            others_tcp_sockets,
+            hosts,
+            ports,
             delayed: Vec::new(),
             party,
         }
@@ -38,7 +36,7 @@ impl Backend {
             *r = CachedBool::Value(share);
         }
 
-        self.party = Party::new(self.my_id, &self.others_tcp_sockets);
+        self.party = Party::new(self.my_id, &self.hosts, &self.ports);
     }
 }
 
@@ -114,9 +112,14 @@ struct Party {
 }
 
 impl Party {
-    fn new(my_id: usize, others_tcp_sockets: &[RawFd]) -> Self {
+    fn new(my_id: usize, hosts: &[String], ports: &[u16]) -> Self {
+        let c_hosts: Vec<std::ffi::CString> = hosts
+            .iter()
+            .map(|h| std::ffi::CString::new(h.clone()).expect("TODO"))
+            .collect();
+        let c_hosts_ptrs: Vec<*const libc::c_char> = c_hosts.iter().map(|h| h.as_ptr()).collect();
         let repr = unsafe {
-            ffi::motion_party_new(my_id, others_tcp_sockets.as_ptr(), others_tcp_sockets.len())
+            ffi::motion_party_new(my_id, c_hosts_ptrs.as_ptr(), ports.as_ptr(), hosts.len())
         };
         Self { repr }
     }
@@ -172,8 +175,9 @@ mod ffi {
     extern "C" {
         pub fn motion_party_new(
             my_id: usize,
-            others_tcp_sockets: *const RawFd,
-            others_tcp_sockets_len: usize,
+            hosts: *const *const libc::c_char,
+            ports: *const u16,
+            len: usize,
         ) -> *mut libc::c_void;
 
         pub fn motion_party_run(party: *mut libc::c_void);

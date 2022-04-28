@@ -88,6 +88,24 @@ where
     }
 }
 
+impl IntoIterator for BitVec {
+    type Item = <bitvec::vec::BitVec<u8, bitvec::order::Lsb0> as IntoIterator>::Item;
+    type IntoIter = <bitvec::vec::BitVec<u8, bitvec::order::Lsb0> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl FromIterator<bool> for BitVec {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = bool>,
+    {
+        Self(<bitvec::vec::BitVec<u8, bitvec::order::Lsb0> as FromIterator<bool>>::from_iter(iter))
+    }
+}
+
 impl BitXor for BitVec {
     type Output = Self;
 
@@ -134,6 +152,27 @@ impl From<u32> for BitVec {
 impl From<BitVec> for u32 {
     fn from(item: BitVec) -> Self {
         assert_eq!(item.len(), u32::BITS as usize);
+        item.0.load_le()
+    }
+}
+
+impl From<u64> for BitVec {
+    fn from(item: u64) -> Self {
+        let mut ret = Self::zero(u64::BITS as usize);
+        ret.0.store_le(item);
+        ret
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for BitVec {
+    fn from(item: [u8; N]) -> Self {
+        Self(bitvec::vec::BitVec::from_vec(item.into()))
+    }
+}
+
+impl From<BitVec> for u64 {
+    fn from(item: BitVec) -> Self {
+        assert_eq!(item.len(), u64::BITS as usize);
         item.0.load_le()
     }
 }

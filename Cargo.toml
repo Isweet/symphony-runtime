@@ -9,6 +9,10 @@ crate-type = ["cdylib"]
 [profile.dev]
 rpath = true
 
+[profile.release]
+rpath = true
+lto   = true
+
 [dependencies]
 scuttlebutt = { path = "extern/swanky/scuttlebutt" }
 rand = "0.7"
