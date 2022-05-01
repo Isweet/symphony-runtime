@@ -7,6 +7,7 @@ use crate::gmw::*;
 use crate::util;
 use crate::util::Channel;
 
+#[derive(Clone)]
 pub struct Int {
     repr: Vec<Bool>,
 }
@@ -29,17 +30,144 @@ impl Int {
         }
     }
 
-    pub fn reify(protocol: &mut Protocol, share: &mut Self) -> Vec<u8> {
-        let bits: Vec<bool> = share
+    pub fn xor(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Self {
+        let repr = a
             .repr
-            .iter_mut()
-            .map(|b| Bool::reify(protocol, b))
+            .iter()
+            .zip(b.repr.iter())
+            .map(|(a, b)| Bool::xor(protocol, a, b))
             .collect();
-        util::from_bits(&bits)
+        Self { repr }
+    }
+
+    pub fn abs(protocol: &mut Protocol, a: &mut Self) -> Self {
+        let len = a.repr.len();
+        let mut res = Self {
+            repr: vec![a.repr[len - 1].clone(); len],
+        };
+        let mut sum = Int::add(protocol, a, &mut res);
+
+        Int::xor(protocol, &mut sum, &mut res)
     }
 
     pub fn add(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Self {
-        todo!()
+        debug_assert_eq!(a.repr.len(), b.repr.len());
+        let mut repr = vec![Bool::constant(protocol, false); a.repr.len()];
+        unsafe {
+            util::full_add(
+                protocol,
+                repr.as_mut_ptr(),
+                a.repr.as_ptr(),
+                b.repr.as_ptr(),
+                repr.len(),
+            )
+        };
+        Self { repr }
+    }
+
+    pub fn sub(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Self {
+        debug_assert_eq!(a.repr.len(), b.repr.len());
+        let mut repr = vec![Bool::constant(protocol, false); a.repr.len()];
+        unsafe {
+            util::full_sub(
+                protocol,
+                repr.as_mut_ptr(),
+                std::ptr::null_mut(),
+                a.repr.as_ptr(),
+                b.repr.as_ptr(),
+                repr.len(),
+            )
+        };
+        Self { repr }
+    }
+
+    pub fn mul(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Self {
+        debug_assert_eq!(a.repr.len(), b.repr.len());
+        let mut repr = vec![Bool::constant(protocol, false); a.repr.len()];
+        util::full_mul(protocol, &mut repr, &a.repr, &b.repr);
+        Self { repr }
+    }
+
+    pub fn div(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Self {
+        debug_assert_eq!(a.repr.len(), b.repr.len());
+        let len = a.repr.len();
+        let a_abs = Int::abs(protocol, a);
+        let b_abs = Int::abs(protocol, b);
+        let sign = Bool::xor(protocol, &a.repr[len - 1], &b.repr[len - 1]);
+        let (mut repr, _) = util::full_div(protocol, &a_abs.repr, &b_abs.repr);
+        unsafe {
+            util::cond_neg(protocol, &sign, repr.as_mut_ptr(), repr.as_ptr(), len);
+        }
+        Self { repr }
+    }
+
+    pub fn modulo(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Self {
+        debug_assert_eq!(a.repr.len(), b.repr.len());
+        let len = a.repr.len();
+        let a_abs = Int::abs(protocol, a);
+        let b_abs = Int::abs(protocol, b);
+        let sign = a.repr[len - 1].clone();
+        let (_, mut repr) = util::full_div(protocol, &a_abs.repr, &b_abs.repr);
+        unsafe {
+            util::cond_neg(protocol, &sign, repr.as_mut_ptr(), repr.as_ptr(), len);
+        }
+        Self { repr }
+    }
+
+    pub fn mux(protocol: &mut Protocol, guard: &mut Bool, t: &mut Self, f: &mut Self) -> Self {
+        let repr = t
+            .repr
+            .iter()
+            .zip(f.repr.iter())
+            .map(|(t, f)| Bool::mux(protocol, guard, t, f))
+            .collect();
+        Self { repr }
+    }
+
+    pub fn eq(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Bool {
+        a.repr
+            .iter()
+            .zip(b.repr.iter())
+            .fold(Bool::constant(protocol, true), |acc, (a, b)| {
+                let eq = Bool::eq(protocol, a, b);
+                Bool::and(protocol, &acc, &eq)
+            })
+    }
+
+    pub fn gte(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Bool {
+        debug_assert_eq!(a.repr.len(), b.repr.len());
+        let len = a.repr.len();
+        let mut a_ext = a.clone();
+        a_ext.repr.push(a_ext.repr[len - 1].clone());
+
+        let mut b_ext = b.clone();
+        b_ext.repr.push(b_ext.repr[len - 1].clone());
+
+        let difference = Int::sub(protocol, &mut a_ext, &mut b_ext);
+        Bool::not(protocol, &difference.repr[difference.repr.len() - 1])
+    }
+
+    pub fn lt(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Bool {
+        let tmp = Int::gte(protocol, a, b);
+        Bool::not(protocol, &tmp)
+    }
+
+    pub fn lte(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Bool {
+        Int::gte(protocol, b, a)
+    }
+
+    pub fn gt(protocol: &mut Protocol, a: &mut Self, b: &mut Self) -> Bool {
+        let tmp = Int::lte(protocol, a, b);
+        Bool::not(protocol, &tmp)
+    }
+
+    pub fn get(protocol: &mut Protocol, share: &mut Self) -> Vec<u8> {
+        let bits: Vec<bool> = share
+            .repr
+            .iter_mut()
+            .map(|b| Bool::get(protocol, b))
+            .collect();
+        util::from_bits(&bits)
     }
 }
 
@@ -60,8 +188,96 @@ pub mod ffi {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn gmw_int32_reify(protocol: *mut Protocol, share: *mut Int) -> i32 {
-        i32::from_le_bytes(Int::reify(&mut *protocol, &mut *share).try_into().unwrap())
+    pub unsafe extern "C" fn gmw_int_add(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *mut Int {
+        let ret = Int::add(&mut *protocol, &mut *a, &mut *b);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_sub(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *mut Int {
+        let ret = Int::sub(&mut *protocol, &mut *a, &mut *b);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_mul(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *mut Int {
+        let ret = Int::mul(&mut *protocol, &mut *a, &mut *b);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_div(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *mut Int {
+        let ret = Int::div(&mut *protocol, &mut *a, &mut *b);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_mod(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *mut Int {
+        let ret = Int::modulo(&mut *protocol, &mut *a, &mut *b);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_mux(
+        protocol: *mut Protocol,
+        guard_raw: *const RefCell<CachedBool>,
+        t: *mut Int,
+        f: *mut Int,
+    ) -> *mut Int {
+        let mut guard = Bool::from_raw(guard_raw);
+        let ret = Int::mux(&mut *protocol, &mut guard, &mut *t, &mut *f);
+        Bool::into_raw(guard);
+        Box::into_raw(Box::new(ret))
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_eq(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *const RefCell<CachedBool> {
+        let ret = Int::eq(&mut *protocol, &mut *a, &mut *b);
+        Bool::into_raw(ret)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_lte(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *const RefCell<CachedBool> {
+        let ret = Int::lte(&mut *protocol, &mut *a, &mut *b);
+        Bool::into_raw(ret)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int32_get(protocol: *mut Protocol, share: *mut Int) -> i32 {
+        i32::from_le_bytes(Int::get(&mut *protocol, &mut *share).try_into().unwrap())
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_drop(share: *mut Int) {
+        Box::from_raw(share);
     }
 
     // Convenience
@@ -102,20 +318,5 @@ pub mod ffi {
         let mut buf = [0u8; 4];
         reveal_recv(channels, &mut buf);
         i32::from_le_bytes(buf)
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn gmw_int_add(
-        protocol: *mut Protocol,
-        a: *mut Int,
-        b: *mut Int,
-    ) -> *mut Int {
-        let ret = Int::add(&mut *protocol, &mut *a, &mut *b);
-        Box::into_raw(Box::new(ret))
-    }
-
-    #[no_mangle]
-    pub unsafe extern "C" fn gmw_int_drop(share: *mut Int) {
-        Box::from_raw(share);
     }
 }

@@ -1,5 +1,8 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::io::BufReader;
+use std::io::BufWriter;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Seek;
@@ -7,35 +10,80 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::rc::Rc;
 
-type LocalStream = Cursor<Vec<u8>>;
-type LocalStreamRef = Rc<RefCell<LocalStream>>;
-type TcpStreamRef = Rc<RefCell<TcpStream>>;
+#[derive(Debug)]
+pub struct LocalChannel(VecDeque<u8>);
 
-#[derive(Debug, Clone)]
-pub enum Channel {
-    Local(LocalStreamRef),
-    Tcp(TcpStreamRef),
+impl LocalChannel {
+    pub fn new() -> Self {
+        LocalChannel(VecDeque::new())
+    }
 }
 
-impl Channel {
-    pub fn new_local() -> Self {
-        Channel::Local(Rc::new(RefCell::new(Cursor::new(Vec::new()))))
+impl Read for LocalChannel {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let size = buf.len();
+        for b in buf {
+            *b = self
+                .0
+                .pop_front()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))?;
+        }
+        std::io::Result::Ok(size)
+    }
+}
+
+impl Write for LocalChannel {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        for b in buf {
+            self.0.push_back(*b)
+        }
+        std::io::Result::Ok(buf.len())
     }
 
-    pub fn new_tcp(tcp: TcpStream) -> Self {
-        Channel::Tcp(Rc::new(RefCell::new(tcp)))
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Result::Ok(())
     }
+}
+
+pub struct TcpChannel {
+    input: BufReader<TcpStream>,
+    output: BufWriter<TcpStream>,
+}
+
+impl TcpChannel {
+    pub fn new(stream: TcpStream) -> Self {
+        let input = BufReader::new(stream.try_clone().expect("TODO"));
+        let output = BufWriter::new(stream);
+        Self { input, output }
+    }
+}
+
+impl Read for TcpChannel {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.input.read(buf)
+    }
+}
+
+impl Write for TcpChannel {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.output.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.flush()
+    }
+}
+
+pub enum Channel {
+    Local(LocalChannel),
+    Tcp(TcpChannel),
 }
 
 impl Read for Channel {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            Channel::Local(l) => {
-                let mut c = l.borrow_mut();
-                c.seek(std::io::SeekFrom::Start(0))?;
-                c.read(buf)
-            }
-            Channel::Tcp(s) => (*s.borrow_mut()).read(buf),
+            Channel::Local(local) => local.read(buf),
+            Channel::Tcp(tcp) => tcp.read(buf),
         }
     }
 }
@@ -43,29 +91,15 @@ impl Read for Channel {
 impl Write for Channel {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
-            Channel::Local(l) => {
-                let mut c = l.borrow_mut();
-                c.seek(std::io::SeekFrom::End(0))?;
-                c.write(buf)
-            }
-            Channel::Tcp(s) => (*s.borrow_mut()).write(buf),
+            Channel::Local(local) => local.write(buf),
+            Channel::Tcp(tcp) => tcp.write(buf),
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
-            Channel::Local(l) => (*l.borrow_mut()).flush(),
-            Channel::Tcp(s) => (*s.borrow_mut()).flush(),
-        }
-    }
-}
-
-impl TryInto<Rc<RefCell<TcpStream>>> for Channel {
-    type Error = ();
-    fn try_into(self) -> Result<Rc<RefCell<TcpStream>>, Self::Error> {
-        match &self {
-            Channel::Local(_) => Err(()),
-            Channel::Tcp(s) => Ok(s.clone()),
+            Channel::Local(local) => local.flush(),
+            Channel::Tcp(tcp) => tcp.flush(),
         }
     }
 }
@@ -78,7 +112,7 @@ pub mod ffi {
 
     #[no_mangle]
     pub unsafe extern "C" fn channel_new_local() -> *mut Channel {
-        let ret = Channel::new_local();
+        let ret = Channel::Local(LocalChannel::new());
         Box::into_raw(Box::new(ret))
     }
 
@@ -92,7 +126,7 @@ pub mod ffi {
         while stream.is_none() {
             stream = TcpStream::connect((host_str, port)).ok();
         }
-        let ret = Channel::new_tcp(stream.unwrap());
+        let ret = Channel::Tcp(TcpChannel::new(stream.unwrap()));
         Box::into_raw(Box::new(ret))
     }
 
@@ -104,7 +138,7 @@ pub mod ffi {
         let host_str = CStr::from_ptr(host).to_str().unwrap();
         let listener = TcpListener::bind((host_str, port)).unwrap();
         let stream = listener.accept().expect("TODO").0;
-        let ret = Channel::new_tcp(stream);
+        let ret = Channel::Tcp(TcpChannel::new(stream));
         Box::into_raw(Box::new(ret))
     }
 
@@ -125,5 +159,10 @@ pub mod ffi {
         (&mut *this)
             .read_exact(std::slice::from_raw_parts_mut(buf, len))
             .expect("TODO")
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn channel_flush(this: *mut Channel) {
+        (&mut *this).flush().expect("TODO")
     }
 }

@@ -44,14 +44,146 @@ pub fn from_bits(bits: &[bool]) -> Vec<u8> {
     bits.chunks(8).map(byte_from_bits).collect()
 }
 
-pub fn read_bool<R: Read>(r: &mut R) -> std::io::Result<bool> {
-    let mut buf = [0u8];
-    r.read_exact(&mut buf).map(|()| buf[0] != 0)
+mod arith {
+    use std::borrow::{Borrow, BorrowMut};
+
+    use crate::gmw::*;
+
+    // SOURCE (lightly modified): https://github.com/emp-toolkit/emp-tool
+    pub unsafe fn full_add(
+        protocol: &mut Protocol,
+        dest: *mut Bool,
+        a: *const Bool,
+        b: *const Bool,
+        size: usize,
+    ) {
+        if size == 0 {
+            return;
+        }
+
+        let mut carry = Bool::constant(protocol, false);
+
+        for i in 0..(size - 1) {
+            let axc = Bool::xor(protocol, &*a.add(i), &carry);
+            let bxc = Bool::xor(protocol, &*b.add(i), &carry);
+            *dest.add(i) = Bool::xor(protocol, &*a.add(i), &bxc);
+            let t = Bool::and(protocol, &axc, &bxc);
+            carry = Bool::xor(protocol, &carry, &t);
+        }
+
+        let axb = Bool::xor(protocol, &*a.add(size - 1), &*b.add(size - 1));
+        *dest.add(size - 1) = Bool::xor(protocol, &carry, &axb);
+    }
+
+    pub unsafe fn full_sub(
+        protocol: &mut Protocol,
+        dest: *mut Bool,
+        borrow_out: *mut Bool,
+        a: *const Bool,
+        b: *const Bool,
+        size: usize,
+    ) {
+        if size == 0 {
+            return;
+        }
+
+        let mut borrow = Bool::constant(protocol, false);
+
+        for i in 0..(size - if borrow_out.is_null() { 1 } else { 0 }) {
+            let bxa = Bool::xor(protocol, &*a.add(i), &*b.add(i));
+            let bxc = Bool::xor(protocol, &borrow, &*b.add(i));
+            *dest.add(i) = Bool::xor(protocol, &bxa, &borrow);
+            let t = Bool::and(protocol, &bxa, &bxc);
+            borrow = Bool::xor(protocol, &borrow, &t);
+        }
+
+        if borrow_out.is_null() {
+            let bxa = Bool::xor(protocol, &*a.add(size - 1), &*b.add(size - 1));
+            *dest.add(size - 1) = Bool::xor(protocol, &bxa, &borrow);
+        } else {
+            *borrow_out = borrow;
+        }
+    }
+
+    pub fn full_mul(protocol: &mut Protocol, dest: &mut [Bool], a: &[Bool], b: &[Bool]) {
+        debug_assert_eq!(a.len(), b.len());
+        debug_assert_eq!(dest.len(), a.len());
+
+        let size = dest.len();
+        let mut temp = vec![Bool::constant(protocol, false); size];
+        for i in 0..size {
+            for j in 0..(size - i) {
+                temp[j] = Bool::and(protocol, &a[j], &b[i])
+            }
+            unsafe {
+                full_add(
+                    protocol,
+                    dest[i..].as_mut_ptr(),
+                    dest[i..].as_ptr(),
+                    temp.as_ptr(),
+                    size - i,
+                )
+            }
+        }
+    }
+
+    pub fn full_div(protocol: &mut Protocol, a: &[Bool], b: &[Bool]) -> (Vec<Bool>, Vec<Bool>) {
+        let len = a.len();
+
+        let mut overflow = vec![Bool::constant(protocol, false); len];
+        overflow[0] = Bool::constant(protocol, false);
+        for i in 1..len {
+            overflow[i] = Bool::or(protocol, &overflow[i - 1], &b[len - i]);
+        }
+
+        let mut temp = vec![Bool::constant(protocol, false); len];
+        let mut quot = vec![Bool::constant(protocol, false); len];
+        let mut rem = a.to_vec();
+        let mut borrow = Bool::constant(protocol, false);
+
+        for i in (0..len).rev() {
+            unsafe {
+                full_sub(
+                    protocol,
+                    temp.as_mut_ptr(),
+                    &mut borrow as *mut Bool,
+                    rem[i..].as_ptr(),
+                    b.as_ptr(),
+                    len - i,
+                );
+            }
+            borrow = Bool::or(protocol, &borrow, &overflow[i]);
+            for j in 0..(len - i) {
+                rem[i + j] = Bool::mux(protocol, &borrow, &rem[i + j], &temp[j]);
+            }
+            quot[i] = Bool::not(protocol, &borrow);
+        }
+
+        (quot, rem)
+    }
+
+    pub unsafe fn cond_neg(
+        protocol: &mut Protocol,
+        sign: &Bool,
+        dest: *mut Bool,
+        src: *const Bool,
+        size: usize,
+    ) {
+        let mut c = sign.clone();
+
+        for i in 0..(size - 1) {
+            *dest.add(i) = Bool::xor(protocol, &*src.add(i), sign);
+            let t = Bool::xor(protocol, &*dest.add(i), &c);
+            c = Bool::and(protocol, &c, &*dest.add(i));
+            *dest.add(i) = t;
+        }
+
+        let t = Bool::xor(protocol, sign, &c);
+        *dest.add(size - 1) = Bool::xor(protocol, &t, &*src.add(size - 1));
+    }
 }
 
-pub fn write_bool<W: Write>(w: &mut W, b: bool) -> std::io::Result<()> {
-    w.write_all(&[b as u8])
-}
+pub use arith::*;
 
 pub mod ffi {
     pub unsafe fn c_to_vec<T: Clone>(data: *const T, len: usize) -> Vec<T> {
