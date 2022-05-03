@@ -33,4 +33,14 @@ pub mod ffi {
     pub unsafe extern "C" fn prg_rand_bool(this: *mut AesRng) -> bool {
         (*this).gen()
     }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn prg_rand_u32(this: *mut AesRng) -> u32 {
+        (*this).gen()
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn prg_rand_u64(this: *mut AesRng) -> u64 {
+        (*this).gen()
+    }
 }

@@ -4,6 +4,8 @@ use crate::util::BitVec;
 use rand::{CryptoRng, Rng};
 use std::cell::RefCell;
 use std::io::{Read, Write};
+use std::os::unix::io::RawFd;
+use std::os::unix::prelude::FromRawFd;
 use std::rc::Rc;
 
 /// A GMW Protocol instance, each owned by a participating party.
@@ -12,6 +14,7 @@ pub struct Protocol {
     hosts: Vec<String>,
     ports: Vec<u16>,
     delayed: Vec<Rc<RefCell<CachedBool>>>,
+    delayed_nat: Vec<Rc<RefCell<CachedNat>>>,
     party: motion::Party,
 }
 
@@ -23,6 +26,7 @@ impl Protocol {
             hosts,
             ports,
             delayed: Vec::new(),
+            delayed_nat: Vec::new(),
             party,
         }
     }
@@ -37,6 +41,15 @@ impl Protocol {
                 _ => unreachable!(),
             };
             *r = CachedBool::Value(share);
+        }
+
+        while let Some(cnr) = self.delayed_nat.pop() {
+            let r = &mut *cnr.borrow_mut();
+            let share = match r {
+                CachedNat::Expr(e) => e.get(),
+                _ => unreachable!(),
+            };
+            *r = CachedNat::Value(share);
         }
 
         self.party = motion::Party::new(self.my_id, &self.hosts, &self.ports);
@@ -107,41 +120,11 @@ pub use boolean::Bool;
 use boolean::CachedBool;
 
 mod natural;
+use natural::CachedNat;
 pub use natural::Nat;
 
 mod integer;
 pub use integer::Int;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::*;
-
-    fn protocol_smoke_sized(n: usize) {
-        let localhost = "127.0.0.1".to_owned();
-        let hosts = vec![localhost; n];
-        let ports: Vec<u16> = (0..n).map(|n| (23000 + n) as u16).collect();
-        let mut threads = Vec::with_capacity(n);
-
-        let start = time::Instant::now();
-        for i in 0..n {
-            let h = hosts.clone();
-            let p = ports.clone();
-            let t = thread::spawn(move || {
-                Protocol::new(i, h, p);
-            });
-            threads.push(t);
-        }
-
-        for t in threads {
-            t.join().unwrap()
-        }
-        let elapsed = start.elapsed();
-        println!("Elapsed time: {:?}", elapsed);
-    }
-
-    #[test]
-    fn protocol_smoke() {
-        protocol_smoke_sized(10)
-    }
-}
+mod tests {}

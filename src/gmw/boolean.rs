@@ -18,7 +18,7 @@ impl CachedBool {
         }
     }
 
-    fn value(&self, protocol: &mut Protocol) -> Option<bool> {
+    fn value(&self, _protocol: &mut Protocol) -> Option<bool> {
         match self {
             CachedBool::Value(share) => Some(*share),
             CachedBool::Expr(_) => None,
@@ -33,58 +33,63 @@ pub struct Bool {
 }
 
 impl Bool {
-    pub fn new(protocol: &mut Protocol, share: bool) -> Self {
-        let expr = motion::Bool::new(&mut protocol.party, share);
+    pub fn from_expr(protocol: &mut Protocol, expr: motion::Bool) -> Self {
         let repr = Rc::new(RefCell::new(CachedBool::Expr(expr)));
         protocol.delayed.push(repr.clone());
         Self { repr }
+    }
+
+    pub fn to_expr(protocol: &mut Protocol, share: &Self) -> motion::Bool {
+        (*share.repr).borrow().clone().into_expr(protocol)
+    }
+
+    pub fn new(protocol: &mut Protocol, share: bool) -> Self {
+        let expr = motion::Bool::new(&mut protocol.party, share);
+        Self::from_expr(protocol, expr)
     }
 
     pub fn constant(protocol: &mut Protocol, value: bool) -> Self {
         let expr = motion::Bool::constant(&mut protocol.party, value);
-        let repr = Rc::new(RefCell::new(CachedBool::Expr(expr)));
-        protocol.delayed.push(repr.clone());
-        Self { repr }
+        Self::from_expr(protocol, expr)
     }
 
     pub fn xor(protocol: &mut Protocol, a: &Self, b: &Self) -> Self {
-        let expr_a = (*a.repr).borrow().clone().into_expr(protocol);
-        let expr_b = (*b.repr).borrow().clone().into_expr(protocol);
+        let expr_a = Self::to_expr(protocol, a);
+        let expr_b = Self::to_expr(protocol, b);
         let expr = expr_a.xor(&expr_b);
-        let repr = Rc::new(RefCell::new(CachedBool::Expr(expr)));
-        protocol.delayed.push(repr.clone());
-        Self { repr }
+        Self::from_expr(protocol, expr)
     }
 
     pub fn or(protocol: &mut Protocol, a: &Self, b: &Self) -> Self {
-        let ab = Bool::and(protocol, a, b);
-        let axb = Bool::xor(protocol, a, b);
-        Bool::xor(protocol, &ab, &axb)
+        let ab = Self::and(protocol, a, b);
+        let axb = Self::xor(protocol, a, b);
+        Self::xor(protocol, &ab, &axb)
     }
 
     pub fn and(protocol: &mut Protocol, a: &Self, b: &Self) -> Self {
-        let expr_a = (*a.repr).borrow().clone().into_expr(protocol);
-        let expr_b = (*b.repr).borrow().clone().into_expr(protocol);
+        let expr_a = Self::to_expr(protocol, a);
+        let expr_b = Self::to_expr(protocol, b);
         let expr = expr_a.and(&expr_b);
-        let repr = Rc::new(RefCell::new(CachedBool::Expr(expr)));
-        protocol.delayed.push(repr.clone());
-        Self { repr }
+        Self::from_expr(protocol, expr)
     }
 
     pub fn not(protocol: &mut Protocol, share: &Self) -> Self {
-        let t = Bool::constant(protocol, true);
-        Bool::xor(protocol, share, &t)
+        let expr_share = Self::to_expr(protocol, share);
+        let expr = expr_share.inv();
+        Self::from_expr(protocol, expr)
     }
 
     pub fn mux(protocol: &mut Protocol, g: &Self, a: &Self, b: &Self) -> Self {
-        let mut tmp = Bool::xor(protocol, a, b);
-        tmp = Bool::and(protocol, &tmp, g);
-        Bool::xor(protocol, b, &tmp)
+        let expr_g = Self::to_expr(protocol, g);
+        let expr_a = Self::to_expr(protocol, a);
+        let expr_b = Self::to_expr(protocol, b);
+        let expr = motion::Bool::mux(&expr_g, &expr_a, &expr_b);
+        Self::from_expr(protocol, expr)
     }
 
     pub fn eq(protocol: &mut Protocol, a: &Self, b: &Self) -> Self {
-        let axb = Bool::xor(protocol, a, b);
-        Bool::not(protocol, &axb)
+        let axb = Self::xor(protocol, a, b);
+        Self::not(protocol, &axb)
     }
 
     pub fn get(protocol: &mut Protocol, value: &Self) -> bool {
@@ -102,7 +107,7 @@ impl Bool {
         Rc::into_raw(this.repr)
     }
 
-    pub unsafe fn from_raw(ptr: *const RefCell<CachedBool>) -> Bool {
+    pub unsafe fn from_raw(ptr: *const RefCell<CachedBool>) -> Self {
         Self {
             repr: Rc::from_raw(ptr),
         }

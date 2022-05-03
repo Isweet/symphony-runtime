@@ -8,6 +8,8 @@ use std::io::Read;
 use std::io::Seek;
 use std::io::Write;
 use std::net::TcpStream;
+use std::os::unix::io::RawFd;
+use std::os::unix::prelude::IntoRawFd;
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -77,6 +79,22 @@ impl Write for TcpChannel {
 pub enum Channel {
     Local(LocalChannel),
     Tcp(TcpChannel),
+}
+
+impl Channel {
+    pub fn try_get_socket(&self) -> Option<RawFd> {
+        match self {
+            Channel::Local(_) => None,
+            Channel::Tcp(channel) => Some(
+                channel
+                    .input
+                    .get_ref()
+                    .try_clone()
+                    .expect("TODO")
+                    .into_raw_fd(),
+            ),
+        }
+    }
 }
 
 impl Read for Channel {
