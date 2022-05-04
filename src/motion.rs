@@ -12,9 +12,11 @@ impl Party {
             .map(|h| std::ffi::CString::new(h.clone()).expect("TODO"))
             .collect();
         let c_hosts_ptrs: Vec<*const libc::c_char> = c_hosts.iter().map(|h| h.as_ptr()).collect();
+        let start = std::time::Instant::now();
         let repr = unsafe {
             ffi::motion_party_new(my_id, c_hosts_ptrs.as_ptr(), ports.as_ptr(), hosts.len())
         };
+        println!("Party initialization took {:?}", start.elapsed());
         Self { repr }
     }
 
@@ -25,6 +27,7 @@ impl Party {
 
 impl Drop for Party {
     fn drop(&mut self) {
+        let x = self.repr;
         unsafe { ffi::motion_party_delete(self.repr) }
     }
 }
