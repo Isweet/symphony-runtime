@@ -40,6 +40,11 @@ pub mod ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn prg_rand_max_u32(this: *mut AesRng, max: u32) -> u32 {
+        (*this).gen_range(0, max)
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn prg_rand_u64(this: *mut AesRng) -> u64 {
         (*this).gen()
     }
