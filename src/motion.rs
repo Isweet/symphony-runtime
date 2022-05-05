@@ -1,22 +1,38 @@
 use std::os::unix::io::RawFd;
 
-/// A wrapper around the [MOTION](https://github.com/encryptogroup/MOTION) `Party` object.
-pub struct Party {
-    repr: *mut libc::c_void,
+pub struct Transports {
+    pub repr: *mut libc::c_void,
 }
 
-impl Party {
+impl Transports {
     pub fn new(my_id: usize, hosts: &[String], ports: &[u16]) -> Self {
         let c_hosts: Vec<std::ffi::CString> = hosts
             .iter()
             .map(|h| std::ffi::CString::new(h.clone()).expect("TODO"))
             .collect();
         let c_hosts_ptrs: Vec<*const libc::c_char> = c_hosts.iter().map(|h| h.as_ptr()).collect();
-        let start = std::time::Instant::now();
         let repr = unsafe {
-            ffi::motion_party_new(my_id, c_hosts_ptrs.as_ptr(), ports.as_ptr(), hosts.len())
+            ffi::motion_transports_new(my_id, c_hosts_ptrs.as_ptr(), ports.as_ptr(), hosts.len())
         };
-        println!("Party initialization took {:?}", start.elapsed());
+        Self { repr }
+    }
+}
+
+impl Drop for Transports {
+    fn drop(&mut self) {
+        unsafe { ffi::motion_transports_delete(self.repr) }
+    }
+}
+
+/// A wrapper around the [MOTION](https://github.com/encryptogroup/MOTION) `Party` object.
+pub struct Party {
+    repr: *mut libc::c_void,
+}
+
+impl Party {
+    pub fn new(my_id: usize, transports: &Transports) -> Self {
+        let start = std::time::Instant::now();
+        let repr = unsafe { ffi::motion_party_new(my_id, transports.repr) };
         Self { repr }
     }
 
@@ -27,7 +43,6 @@ impl Party {
 
 impl Drop for Party {
     fn drop(&mut self) {
-        let x = self.repr;
         unsafe { ffi::motion_party_delete(self.repr) }
     }
 }
@@ -177,12 +192,16 @@ mod ffi {
     use super::*;
 
     extern "C" {
-        pub fn motion_party_new(
+        pub fn motion_transports_new(
             my_id: usize,
             hosts: *const *const libc::c_char,
             ports: *const u16,
             len: usize,
         ) -> *mut libc::c_void;
+
+        pub fn motion_transports_delete(transports: *mut libc::c_void);
+
+        pub fn motion_party_new(my_id: usize, transports: *mut libc::c_void) -> *mut libc::c_void;
 
         pub fn motion_party_run(party: *mut libc::c_void);
 

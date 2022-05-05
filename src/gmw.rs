@@ -11,22 +11,21 @@ use std::rc::Rc;
 /// A GMW Protocol instance, each owned by a participating party.
 pub struct Protocol {
     my_id: usize,
-    hosts: Vec<String>,
-    ports: Vec<u16>,
     delayed: Vec<Rc<RefCell<CachedBool>>>,
     delayed_nat: Vec<Rc<RefCell<CachedNat>>>,
     party: motion::Party,
+    transports: motion::Transports,
 }
 
 impl Protocol {
     pub fn new(my_id: usize, hosts: Vec<String>, ports: Vec<u16>) -> Self {
-        let party = motion::Party::new(my_id, &hosts, &ports);
+        let transports = motion::Transports::new(my_id, &hosts, &ports);
+        let party = motion::Party::new(my_id, &transports);
         Self {
             my_id,
-            hosts,
-            ports,
             delayed: Vec::new(),
             delayed_nat: Vec::new(),
+            transports,
             party,
         }
     }
@@ -52,7 +51,7 @@ impl Protocol {
             *r = CachedNat::Value(share);
         }
 
-        self.party = motion::Party::new(self.my_id, &self.hosts, &self.ports);
+        self.party = motion::Party::new(self.my_id, &self.transports);
     }
 }
 
