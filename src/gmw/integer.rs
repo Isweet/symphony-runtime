@@ -261,6 +261,16 @@ pub mod ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn gmw_int_lt(
+        protocol: *mut Protocol,
+        a: *mut Int,
+        b: *mut Int,
+    ) -> *const RefCell<CachedBool> {
+        let ret = Int::lt(&mut *protocol, &mut *a, &mut *b);
+        Bool::into_raw(ret)
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn gmw_int_lte(
         protocol: *mut Protocol,
         a: *mut Int,
