@@ -174,6 +174,20 @@ pub mod ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn gmw_bool_or(
+        protocol: *mut Protocol,
+        a_raw: *const RefCell<CachedBool>,
+        b_raw: *const RefCell<CachedBool>,
+    ) -> *const RefCell<CachedBool> {
+        let a = Bool::from_raw(a_raw);
+        let b = Bool::from_raw(b_raw);
+        let ret = Bool::or(&mut *protocol, &a, &b);
+        assert_eq!(a_raw, Bool::into_raw(a));
+        assert_eq!(b_raw, Bool::into_raw(b));
+        Bool::into_raw(ret)
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn gmw_bool_mux(
         protocol: *mut Protocol,
         g_raw: *const RefCell<CachedBool>,
