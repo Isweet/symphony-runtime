@@ -5,7 +5,7 @@
 use std::env;
 
 fn main() {
-    let rpath = "/Users/ian/Projects/symphony-lang/extern/symphony-runtime/target/release";
+    let rpath = "/Users/ian/Projects/symphony-lang/extern/symphony-runtime/target/debug";
     println!("cargo:rustc-cdylib-link-arg=-Wl,-rpath,{}", rpath);
 
     let mut motion_lib_path = env::current_dir().unwrap();

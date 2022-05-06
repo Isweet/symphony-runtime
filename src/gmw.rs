@@ -55,6 +55,25 @@ impl Protocol {
     }
 }
 
+fn share_send_bool<Prg: Rng + CryptoRng, W: Write>(
+    prg: &mut Prg,
+    channels: &mut [&mut W],
+    clear: bool,
+) {
+    let mut masked = clear;
+    let mut share = false;
+
+    for c in channels.iter_mut().skip(1) {
+        share = prg.gen();
+        let buf = [share as u8; 1];
+        c.write_all(&buf).expect("TODO");
+        masked ^= share;
+    }
+
+    let buf = [masked as u8; 1];
+    channels[0].write_all(&buf).expect("TODO")
+}
+
 fn share_send<Prg: Rng + CryptoRng, W: Write>(
     prg: &mut Prg,
     channels: &mut [&mut W],
@@ -70,6 +89,19 @@ fn share_send<Prg: Rng + CryptoRng, W: Write>(
     }
 
     channels[0].write_all(&masked).expect("TODO")
+}
+
+fn reveal_recv_bool<R: Read>(channels: &mut [&mut R]) -> bool {
+    let mut ret = false;
+
+    for c in channels {
+        let mut buf = [0u8; 1];
+        c.read_exact(&mut buf).expect("TODO");
+        let share = buf[0] != 0;
+        ret ^= share;
+    }
+
+    ret
 }
 
 fn reveal_recv<R: Read>(channels: &mut [&mut R], clear: &mut [u8]) {

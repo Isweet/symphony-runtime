@@ -80,11 +80,9 @@ impl Bool {
     }
 
     pub fn mux(protocol: &mut Protocol, g: &Self, a: &Self, b: &Self) -> Self {
-        let expr_g = Self::to_expr(protocol, g);
-        let expr_a = Self::to_expr(protocol, a);
-        let expr_b = Self::to_expr(protocol, b);
-        let expr = motion::Bool::mux(&expr_g, &expr_a, &expr_b);
-        Self::from_expr(protocol, expr)
+        let axb = Self::xor(protocol, a, b);
+        let t = Self::and(protocol, g, &axb);
+        Self::xor(protocol, b, &t)
     }
 
     pub fn eq(protocol: &mut Protocol, a: &Self, b: &Self) -> Self {
@@ -176,6 +174,23 @@ pub mod ffi {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn gmw_bool_mux(
+        protocol: *mut Protocol,
+        g_raw: *const RefCell<CachedBool>,
+        a_raw: *const RefCell<CachedBool>,
+        b_raw: *const RefCell<CachedBool>,
+    ) -> *const RefCell<CachedBool> {
+        let g = Bool::from_raw(g_raw);
+        let a = Bool::from_raw(a_raw);
+        let b = Bool::from_raw(b_raw);
+        let ret = Bool::mux(&mut *protocol, &g, &a, &b);
+        assert_eq!(g_raw, Bool::into_raw(g));
+        assert_eq!(a_raw, Bool::into_raw(a));
+        assert_eq!(b_raw, Bool::into_raw(b));
+        Bool::into_raw(ret)
+    }
+
+    #[no_mangle]
     pub unsafe extern "C" fn gmw_bool_drop(share: *const RefCell<CachedBool>) {
         Bool::from_raw(share);
     }
@@ -192,8 +207,7 @@ pub mod ffi {
         let prg = &mut *prg;
         let channels: &mut [&mut Channel] =
             std::mem::transmute(std::slice::from_raw_parts_mut(channels, channels_len));
-        let buf = [clear as u8; 1];
-        share_send(prg, channels, &buf)
+        share_send_bool(prg, channels, clear)
     }
 
     #[no_mangle]
@@ -218,8 +232,6 @@ pub mod ffi {
     ) -> bool {
         let channels: &mut [&mut Channel] =
             std::mem::transmute(std::slice::from_raw_parts_mut(channels, channels_len));
-        let mut buf = [0u8; 1];
-        reveal_recv(channels, &mut buf);
-        buf[0] != 0
+        reveal_recv_bool(channels)
     }
 }
