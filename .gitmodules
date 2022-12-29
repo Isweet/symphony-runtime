@@ -4,3 +4,12 @@
 [submodule "extern/MOTION"]
 	path = extern/MOTION
 	url = git@github.com:Isweet/MOTION.git
+[submodule "extern/emp-ot"]
+	path = extern/emp-ot
+	url = git@github.com:Isweet/emp-ot.git
+[submodule "extern/emp-tool"]
+	path = extern/emp-tool
+	url = git@github.com:Isweet/emp-tool.git
+[submodule "extern/emp-sh2pc"]
+	path = extern/emp-sh2pc
+	url = git@github.com:Isweet/emp-sh2pc.git
